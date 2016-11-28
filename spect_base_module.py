@@ -10,66 +10,161 @@ import math as m
 from numpy import linalg as LA
 
 #parameters
-Rtit = 2575.0
+Rtit = 2575.0 # km
+Mtit = 1.3452e23 # kg
 kb = 1.38065e-19 # boltzmann constant to use with P in hPa, n in cm-3, T in K (10^-4 * Kb standard)
+c_R = 8.31446 # J K-1 mol-1
+c_G = 6.67408e-11 # m3 kg-1 s-2
 
 
-def trova_spip(file):
+#################### DEFINE classes! ###############
+
+class Pixel(object):
+    """
+    Each instance is a pixel, with all useful things of a pixel. Simplified version with few attributes.
+    """
+
+    def __init__(self, cube, year, dist, lat, alt, sza, phang, wl, spe, bbl):
+        self.cube = cube
+        self.year = year
+        self.dist = dist
+        self.lat = lat
+        self.alt = alt
+        self.sza = sza
+        self.phang = phang
+        self.wl = np.array(wl)
+        self.spe = np.array(spe)
+        self.bbl = np.array(bbl)
+
+
+    def plot(self, range=None, mask=True, show=True, nomefile=None):
+        """
+        Plots spectrum in the required range. If mask=True does not show masked values.
+        :param range: Wl range in which to plot
+        :return:
+        """
+        if range is not None:
+            ok = (self.wl >= range[0]) & (self.wl <= range[1]) & (self.bbl == 1)
+        else:
+            ok = (self.bbl == 1)
+
+        fig = pl.figure(figsize=(8, 6), dpi=150)
+        pl.plot(self.wl[ok],self.spe[ok])
+        pl.grid()
+        pl.xlabel('Wavelength (nm)')
+        pl.ylabel('Radiance (W/m^2/nm/sr)')
+        if show: pl.show()
+        if nomefile is not None:
+            fig.savefig(nomefile, format='eps', dpi=150)
+            pl.close()
+
+        return
+
+    def integr(self, range=None):
+        """
+        Integrates the spectrum in the selected range. If no range the full spectrum is integrated.
+        """
+
+        if range is None:
+            range = [np.min(self.wl),np.max(self.wl)]
+
+        cond = (self.wl >= range[0]) & (self.wl <= range[1])
+        intt = np.trapz(self.spe[cond],x=self.wl[cond])
+
+        return intt
+
+
+
+class PixelSet(np.ndarray):
+    """
+    A set of pixels. Takes as input an existing array of pixels and adds as attributes the vectorized attributes of Pixel.
+    No new methods for now.
+    """
+
+    def __new__(cls, input_array, descr=None):
+        # Input array is an already formed ndarray instance
+        # We first cast to be our class type
+        obj = np.asarray(input_array).view(cls)
+        # add the new attribute to the created instance
+        obj.descr = descr
+        # Finally, we must return the newly created object:
+        return obj
+
+    def __array_finalize__(self, obj):
+        # see InfoArray.__array_finalize__ for comments
+        if obj is None: return
+        self.descr = getattr(obj, 'descr', None)
+        for name in obj[0].__dict__.keys():
+            setattr(self,name,np.array([getattr(pix,name) for pix in obj]))
+
+    def read_res(self, cart=''):
+        """
+        Leggi i risultati da cart e appiccicali ai pixel. Crea nuovi attributi anche per PixelSet.
+        :param cart:
+        :return:
+        """
+        fit_results = ['h3p_col','h3p_temp','err_col','err_temp','ch4_col','err_ch4','chisq','offset','wl_shift']
+        for attr in fit_results:
+            print(attr)
+            #leggi
+            for pix in self.pixels:
+                pix.add_res(attr,res)
+            #appiccica ai pixel
+            #vettorizza
+        print('da scrivere')
+        return
+
+    def ciao(self):
+        print('ciao')
+        return
+
+    def ortomap(self, attr):
+        print('da scrivere')
+        attr_to_plot = getattr(self,attr)
+        jirfu.ortomap(self.lat,self.lon,attr_to_plot)
+        return
+
+    # def __init__(self, descr='', pixels=None):
+    #     self.descr = descr
+    #     if pixels is not None:
+    #         self.pixels = pixels
+    #         for name in pixels[0].__dict__.keys():
+    #             setattr(self,name,np.array([getattr(pix,name) for pix in pixels]))
+            # self.cube = np.array([pix.cube for pix in pixels])
+            # self.year = year
+            # self.dist = dist
+            # self.lat = lat
+            # self.alt = alt
+            # self.sza = sza
+            # self.phang = phang
+            # self.wl = np.array(wl)
+            # self.spe = np.array(spe)
+            # self.bbl = np.array(bbl)
+
+    # def _wrapped_method(nome):
+    #     return
+    #
+    # def _wrapped_attr(self, attr):
+    #     return
+    #
+    # wrapped_attr = ('cube', 'dist', 'sza', 'spe', 'bbl', 'wl', 'year', 'lat', 'alt', 'phang')
+    # for attr in wrapped_attr:
+    #     setattr(Set,attr,_wrapped_attr(attr))
+
+
+
+#### Funzioni
+
+def trova_spip(file, hasha = '#'):
     """
     Trova il '#' nei file .dat
     """
-    hasha = '#'
     gigi = 'a'
     while gigi != hasha :
         linea = file.readline()
         gigi = linea[0]
     else:
         return
-
-
-def read_res_jir(filename):
-    infile = open(filename, 'r')
-    data = [line.split() for line in infile]
-    data_arr = np.array(data)
-    i = [int(r) for r in data_arr[:, 0]]
-    j = [int(r) for r in data_arr[:, 1]]
-    temp = [float(r) for r in data_arr[:, 2]]
-    err_t = [float(r) for r in data_arr[:, 3]]
-    infile.close()
-    return i,j,temp,err_t
-
-
-def read_res_jir_2(filename):
-    infile = open(filename, 'r')
-    data = [line.split() for line in infile]
-    data_arr = np.array(data)
-    i = [int(r) for r in data_arr[:, 0]]
-    j = [int(r) for r in data_arr[:, 1]]
-    temp = [float(r) for r in data_arr[:, 2]]
-    infile.close()
-    return i,j,temp
-
-
-def read_res_jir_3(filename):
-    infile = open(filename, 'r')
-    data = [line.split() for line in infile]
-    data_arr = np.array(data)
-    i = [int(r) for r in data_arr[:, 0]]
-    temp = [float(r) for r in data_arr[:, 1]]
-    err_t = [float(r) for r in data_arr[:, 2]]
-    infile.close()
-    return i,temp,err_t
-
-
-def read_res_jir_4(filename):
-    infile = open(filename, 'r')
-    data = [line.split() for line in infile]
-    data_arr = np.array(data)
-    i = [int(r) for r in data_arr[:, 0]]
-    temp = [float(r) for r in data_arr[:, 1]]
-    infile.close()
-    return i,temp
-
 
 def read_obs(filename):
     """
@@ -129,28 +224,6 @@ def writevec(file,vec,n_per_line,format_str):
         strin = nres*format_str+'\n'
         file.write(strin.format(*vec[i1:n]))
 
-    return
-
-
-def write_obs_JIR(freq,spe,filename,comment=''):
-    """
-    Writes files of JIRAM observations. (JIRAM_MAP format)
-    :return:
-    """
-    from datetime import datetime
-    infile = open(filename, 'w')
-    data = datetime.now()
-    infile.write(comment+'\n')
-    infile.write('\n')
-    infile.write('Processed on: {}\n'.format(data))
-    infile.write('\n')
-    infile.write('Wavelength (nm), spectral data (W m^-2 um^-1 sr^-1):\n')
-    infile.write('{:1s}\n'.format('#'))
-
-    for fr, ob in zip(freq, spe):
-        infile.write('{:10.3f}{:15.5e}\n'.format(fr,ob))
-
-    infile.close()
     return
 
 
@@ -234,18 +307,7 @@ def read_input_prof_gbb(filename, type, n_alt = 151, alt_step = 10.0, n_gas = 86
         proftot = np.array(proftot)
 
 
-    if(type == 'temp'):
-        print(type)
-        trova_spip(infile)
-        trova_spip(infile)
-        prof = []
-        while len(prof) < n_alt:
-            line = infile.readline()
-            prof += list(map(float, line.split()))
-        proftot = np.array(prof[::-1])
-
-
-    if(type == 'pres'):
+    if(type == 'temp' or type == 'pres'):
         print(type)
         trova_spip(infile)
         trova_spip(infile)
@@ -283,6 +345,76 @@ def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0):
     return
 
 
+def read_input_atm_man(filename):
+    """
+    Reads input atmosphere in manuel standard.
+    :param filename:
+    :return:
+    """
+    infile = open(filename,'r')
+    trova_spip(infile,hasha='$')
+    n_alt = int(infile.readline())
+    trova_spip(infile,hasha='$')
+    prof = []
+    while len(prof) < n_alt:
+        line = infile.readline()
+        prof += list(map(float, line.split()))
+    alts = np.array(prof)
+
+    trova_spip(infile,hasha='$')
+    prof = []
+    while len(prof) < n_alt:
+        line = infile.readline()
+        prof += list(map(float, line.split()))
+    pres = np.array(prof)
+
+    trova_spip(infile,hasha='$')
+    prof = []
+    while len(prof) < n_alt:
+        line = infile.readline()
+        prof += list(map(float, line.split()))
+    temp = np.array(prof)
+
+    return alts, temp, pres
+
+
+def write_input_atm_man(filename, z, T, P, n_alt = 301, alt_step = 5.0):
+    """
+    Writes input profiles in manuel standard formatted files
+    :return:
+    """
+    alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
+
+    infile = open(filename, 'w')
+    n_per_line = 5
+
+
+    str1 = '{:8.1f}'
+    str2 = '{:11.4e}'
+    str3 = '{:9.3f}'
+
+    infile.write('# Atmosphere with wavy prof, reference Atm 05 S, 2006/07\n')
+    infile.write('\n')
+    infile.write('Number of levels\n')
+    infile.write('{:1s}\n'.format('$'))
+    infile.write('{}\n'.format(n_alt))
+    infile.write('\n')
+    infile.write('Altitudes [km]\n')
+    infile.write('{:1s}\n'.format('$'))
+    writevec(infile,z,n_per_line,str1)
+    infile.write('\n')
+    infile.write('Pressure [hPa]\n')
+    infile.write('{:1s}\n'.format('$'))
+    writevec(infile,P,n_per_line,str2)
+    infile.write('\n')
+    infile.write('Temperature [K]\n')
+    infile.write('{:1s}\n'.format('$'))
+    writevec(infile,T,n_per_line,str3)
+    infile.close()
+
+    return
+
+
 def read_input_prof_lin(filename, n_col, n_alt = 151, alt_step = 10.0):
     """
     Reads input profiles from
@@ -295,53 +427,6 @@ def write_input_prof_lin():
     Reads input profiles from gbb
     :return:
     """
-
-
-def scriviinputmanuel(alts,temp,pres,filename):
-    """
-    Writes input PT for fomichev in Manuel's format.
-    :return:
-    """
-    fi = open(filename,'w')
-
-    ('Number of levels\n')
-    fi.write('{:1s}\n'.format('$'))
-    fi.write('{:5d}\n'.format(len(alts)))
-
-    fi.write('\n')
-    fi.write('altitude (km)\n')
-    fi.write('{:1s}\n'.format('$'))
-    writevec(fi,alts,5,'{:11.1f}')
-
-    fi.write('\n')
-    fi.write('pressure (hPa)\n')
-    fi.write('{:1s}\n'.format('$'))
-    writevec(fi,pres,8,'{:11.3e}')
-
-    fi.write('\n')
-    fi.write('temperature (K)\n')
-    fi.write('{:1s}\n'.format('$'))
-    writevec(fi,temp,8,'{:11.3e}')
-
-    fi.close()
-    return
-
-
-def leggioutfomi(nomeout):
-    """
-    Reads Fomichev output.
-    :param nomeout:
-    :return:
-    """
-    fi = open(nomeout,'r')
-    trova_spip(fi)
-
-    data = np.array([map(float, line.split()) for line in fi])
-
-    alt_fomi = np.array(data[:,0])
-    cr_fomi = np.array(data[:,5])
-
-    return alt_fomi, cr_fomi
 
 
 def read_sim_gbb(filename,skip_first = 0, skip_last = 0):
@@ -548,35 +633,6 @@ def plotta_sim_VIMS(nomefile,freq,obs,sim,sims,names,err=1.5e-8,title='Plot', au
 
     return
 
-
-def plotcorr(x, y, filename, xlabel = 'x', ylabel = 'y', xlim = [-1,-1], ylim = [-1,-1]):
-    """
-    Plots correlation graph between x and y, fitting a line and calculating Pearson's R coeff.
-    :param filename: abs. path of the graph
-    :params xlabel, ylabel: labels for x and y axes
-    """
-    pearR = np.corrcoef(x,y)[1,0]
-    A = np.vstack([x,np.ones(len(x))]).T  # A = [x.T|1.T] dove 1 = [1,1,1,1,1,..]
-    m,c = np.linalg.lstsq(A,y)[0]
-    xlin = np.linspace(min(x),max(x),11)
-
-    fig = pl.figure(figsize=(8, 6), dpi=150)
-    ax = fig.add_subplot(111)
-    pl.xlabel(xlabel)
-    pl.ylabel(ylabel)
-    pl.grid()
-    if xlim[0] != xlim[1]:
-        pl.xlim(xlim[0],xlim[1])
-    if ylim[0] != ylim[1]:
-        pl.ylim(ylim[0],ylim[1])
-    pl.scatter(x, y, label='Results', color='blue', s=2)
-    pl.plot(xlin, xlin*m+c, color='red', label='y = {:8.2g}*x + {:8.2g}'.format(m,c))
-    pl.legend(loc=3,fancybox =1)
-    fig.savefig(filename, format='eps', dpi=150)
-    pl.close()
-
-    return
-
 #################################################################################
 ##                                                                            ###
 ##                                                                            ###
@@ -691,6 +747,57 @@ def LOS_2D(alt_tg,alts,T,P,gas_ok,ext_coef,Rpl=2575.0):
     Rcols = Rcols[1:,:]
 
     return z_los[:-1],steps,temps,press,gases,Rcols,Tau_aer
+
+
+def hydro_P(z,T,MM,P_0=None,R=Rtit,M=Mtit):
+    """
+    Calculates hydrostatic pressure in hPa, given temp. profile.
+    :param z: altitude (km)
+    :param T: temperature (K)
+    :param MM: mean molecular mass (amu)
+    :param P_0: Surface pressure (hPa)
+    :param R: Planetary radius (km)
+    :param M: Planetary mass (kg)
+    :return: P, pressure profile on z grid
+    """
+    P_huy = 1.4612e3 #hPa
+
+    if P_0 is None:  # define P_0 as the huygens pressure
+        P_0 = P_huy
+    reverse = False
+    if z[1] < z[0]: # reverse order if z decreasing
+        reverse = True
+        z = z[::-1]
+        T = T[::-1]
+        MM = MM[::-1]
+    if np.size(MM) == 1: # if MM is a scalar, then multiply for a np.ones vector
+        mu = MM
+        MM = mu*np.ones(len(z))
+
+    R = R*1e3 # from km to m
+    z = z*1e3
+    MM = MM*1e-3 # from amu to kg/mol
+
+    g = c_G*M/(R+z)**2
+    print(g[0])
+    #g=g*1.352/g[0]
+
+    HH = MM*g/(c_R*T)
+
+    P = np.zeros(len(z))
+    P2 = P
+    P[0] = P_0
+    for i in range(1,len(z)):
+        # dz = z[i]-z[i-1]
+        # int = HH[i-1]*dz+0.5*dz*(HH[i]-HH[i-1])  # integrazione stupida
+        # P[i] = P[i-1]*np.exp(-int)
+        int = np.trapz(HH[0:i+1],x=z[0:i+1])
+        P2[i] = P[0]*np.exp(-int)
+
+    if reverse:
+        P2 = P2[::-1]
+
+    return P2
 
 
 def findT(alt,alt_atm,temp,diff=1.0):
