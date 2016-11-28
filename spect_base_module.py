@@ -429,6 +429,52 @@ def write_input_prof_lin():
     """
 
 
+def scriviinputmanuel(alts,temp,pres,filename):
+    """
+    Writes input PT for fomichev in Manuel's format.
+    :return:
+    """
+    fi = open(filename,'w')
+    fi.write('Number of levels\n')
+    fi.write('{:1s}\n'.format('$'))
+    fi.write('{:5d}\n'.format(len(alts)))
+
+    fi.write('\n')
+    fi.write('altitude (km)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,alts,5,'{:11.1f}')
+
+    fi.write('\n')
+    fi.write('pressure (hPa)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,pres,8,'{:11.3e}')
+
+    fi.write('\n')
+    fi.write('temperature (K)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,temp,8,'{:11.3e}')
+
+    fi.close()
+    return
+
+
+def leggioutfomi(nomeout):
+    """
+    Reads Fomichev output.
+    :param nomeout:
+    :return:
+    """
+    fi = open(nomeout,'r')
+    trova_spip(fi)
+
+    data = np.array([map(float, line.split()) for line in fi])
+
+    alt_fomi = np.array(data[:,0])
+    cr_fomi = np.array(data[:,5])
+
+    return alt_fomi, cr_fomi
+
+
 def read_sim_gbb(filename,skip_first = 0, skip_last = 0):
     """
     Read sim_*.dat or spet_*.dat files in gbb format.
@@ -632,6 +678,36 @@ def plotta_sim_VIMS(nomefile,freq,obs,sim,sims,names,err=1.5e-8,title='Plot', au
     pl.close(fig)
 
     return
+
+
+def plotcorr(x, y, filename, xlabel = 'x', ylabel = 'y', xlim = [-1,-1], ylim = [-1,-1]):
+    """
+    Plots correlation graph between x and y, fitting a line and calculating Pearson's R coeff.
+    :param filename: abs. path of the graph
+    :params xlabel, ylabel: labels for x and y axes
+    """
+    pearR = np.corrcoef(x,y)[1,0]
+    A = np.vstack([x,np.ones(len(x))]).T  # A = [x.T|1.T] dove 1 = [1,1,1,1,1,..]
+    m,c = np.linalg.lstsq(A,y)[0]
+    xlin = np.linspace(min(x),max(x),11)
+
+    fig = pl.figure(figsize=(8, 6), dpi=150)
+    ax = fig.add_subplot(111)
+    pl.xlabel(xlabel)
+    pl.ylabel(ylabel)
+    pl.grid()
+    if xlim[0] != xlim[1]:
+        pl.xlim(xlim[0],xlim[1])
+    if ylim[0] != ylim[1]:
+        pl.ylim(ylim[0],ylim[1])
+    pl.scatter(x, y, label='Results', color='blue', s=2)
+    pl.plot(xlin, xlin*m+c, color='red', label='y = {:8.2g}*x + {:8.2g}'.format(m,c))
+    pl.legend(loc=3,fancybox =1)
+    fig.savefig(filename, format='eps', dpi=150)
+    pl.close()
+
+    return
+
 
 #################################################################################
 ##                                                                            ###
