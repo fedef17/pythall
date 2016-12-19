@@ -6,16 +6,143 @@ import numpy as np
 import sys
 import os.path
 import matplotlib.pyplot as pl
+import matplotlib.ticker as ticker
 import matplotlib.lines as lin
 import math as m
 from numpy import linalg as LA
 from mpl_toolkits.basemap import Basemap
 from scipy.interpolate import griddata
 import pickle
+import spect_base_module as sbm
+from matplotlib import rcParams
 
+
+class JirPix(sbm.Pixel):
+    """
+    Pixel for Jiram.
+    """
+    def __init__(self, keys = None, things = None):
+        if keys is None:
+            return
+        for key, thing in zip(keys,things):
+            setattr(self,key,thing)
+        self.spe = 1e-3*self.spe
+        fondo = fondojir(self.wl, self.spe)
+        mask = findspi(self.wl,self.spe)
+        self.mask = mask
+        int_L = self.integr(range=[3200,3700],fondo=fondo)
+        self.int_L = int_L
+        return
+
+    def plotsim(self):
+        pl.plot(self.wlsim,self.obs,label='Obs')
+        pl.plot(self.wlsim,self.sim,label='Sim')
+        pl.plot(self.wlsim,self.resid,label='Resid')
+        pl.grid()
+        pl.legend()
+        pl.show()
+
+
+class JirSet(sbm.PixelSet):
+    """
+    Set for Jiram.
+    """
+
+    def stereomap(self, attr, **kwargs):
+        attr_to_plot = getattr(self,attr)
+        stereomap2(self.pc_lat,self.pc_lon,attr_to_plot,**kwargs)
+        return
+
+    def stereoplot(self, attr, **kwargs):
+        attr_to_plot = getattr(self,attr)
+        stereoplot(self.pc_lat,self.pc_lon,attr_to_plot,**kwargs)
+        return
+
+    def scatter(self, attr, **kwargs):
+        attr_to_plot = getattr(self,attr)
+        stereoplot(self.pc_lat,self.pc_lon,attr_to_plot,**kwargs)
+        return
+
+    def read_res(self, cart='', lwlsh = True, lch4 = True):
+        """
+        Leggi i risultati da cart e appiccicali ai pixel. Crea nuovi attributi anche per PixelSet.
+        :param cart:
+        :return:
+        """
+        fit_results = ['h3p_col','err_col','h3p_temp','err_temp','chisq','offset','ch4_col','err_ch4','wl_shift']
+        if not lwlsh:
+            fit_results = fit_results[:-1]
+        if not lch4:
+            fit_results = fit_results[:-3]
+
+        ii,col1, err_col = read_res_jir_3(cart+'CD-H3p.dat')
+        iit,temp1, err_temp = read_res_jir_3(cart+'VT-H3p.dat')
+        iic,chi1 = read_res_jir_4(cart+'chisq.dat')
+        iio,off1 = read_res_jir_4(cart+'offset_ok.dat')
+        if lwlsh: iis,shi1 = read_res_jir_4(cart+'shift.dat')
+        if lch4: ii4,ch41, err_ch41 = read_res_jir_3(cart+'CD-CH4.dat')
+
+        col = np.zeros(len(self))
+        err_c = np.zeros(len(self))
+        temp = np.zeros(len(self))
+        err_t = np.zeros(len(self))
+        chi = np.zeros(len(self))
+        off = np.zeros(len(self))
+        if lwlsh: shi = np.zeros(len(self))
+        if lch4:
+            ch4 = np.zeros(len(self))
+            err_ch4 = np.zeros(len(self))
+
+        col[ii] = col1
+        err_c[ii] = err_col
+        temp[iit] = temp1
+        err_t[iit] = err_temp
+        chi[iic] = chi1
+        chi[chi == 0.0] = np.nan
+        off[iio] = off1
+        if lwlsh: shi[iis] = shi1
+        if lch4:
+            ch4[ii4] = ch41
+            err_ch4[ii4] = err_ch41
+
+        results = [col,err_c,temp,err_t,chi,off]
+        if lch4:
+            results.append(ch4)
+            results.append(err_ch4)
+        if lwlsh: results.append(shi)
+
+        for attr,res in zip(fit_results,results):
+            for pix,res1 in zip(self,res):
+                setattr(pix,attr,res1)
+            setattr(self,attr,res)
+
+        return
+
+###########################################
+
+
+# def convert_to_pix(array):
+#     """
+#     Converts Jiram structured array pixs to sbm.SetPixel array. Reads the results from folder cart.
+#     :param array:
+#     :param cart:
+#     :return:
+#     """
+def fmt_10(x, pos):
+    a, b = '{:.1e}'.format(x).split('e')
+    b = int(b)
+    return r'${} \times 10^{{{}}}$'.format(a, b)
+
+def fmt(lon):
+    if rcParams['text.usetex']:
+        lonlabstr = r'${%s\/^{\circ}}$'%lon
+    else:
+        lonlabstr = u'%s\N{DEGREE SIGN}'%lon
+    return lonlabstr
 
 def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',min=None,max=None,title='',show=False,aur_model='stat',
-               proj='orto',condpo=None, pdf=None):
+               proj='orto',condpo=None, cbarform=None, cbarmult = None, cbarlabel = '', step = None, pdf=None,
+               edges=None):
     """
     Plots points on a stereographic map with colors.
     :return:
@@ -23,7 +150,8 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',min=None,max=None,t
 
     rsp = [71492.,66854.]
     fig = pl.figure(figsize=(8, 6), dpi=150)
-    pl.title(title)
+    ax = pl.subplot()
+    pl.title(title, y=1.05)
 
     if polo == 'N':
         blat = 55
@@ -48,17 +176,55 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',min=None,max=None,t
     stat_x = stat_x+x0
     stat_y = stat_y+y0
 
-    map.drawmeridians(np.arange(0,360,30),labels=[1,1,0,1],fontsize=10)
+    map.drawmeridians(np.arange(0,360,30),labels=[1,1,1,1],fontsize=10,fmt=fmt)
 
     x, y = map(lon,lat)
 
-    if condpo is None:
+    if condpo is None and edges is None:
         sca = map.scatter(x,y,c = col,s=5,edgecolors='none',vmin=min,vmax=max)
-    else:
+    elif edges is None:
         sca1 = map.scatter(x[~condpo],y[~condpo],s=2,color='grey',edgecolors='none')
         sca2 = map.scatter(x[condpo],y[condpo],c=col[condpo],s=5,edgecolors='none',vmin=min,vmax=max)
+    else:
+        edges_xy = []
+        for lonlats in edges:
+            edges_xy.append([map(lo,la) for [lo,la] in lonlats])
 
-    pl.colorbar()
+        pixies = pixel_proj(edges_xy)
+        if max == 0:
+            macs = max(col)
+            mins = min(col)
+        else:
+            macs = max
+            mins = min
+        pixies.set_array(col)
+        pixies.set_clim([mins,macs])
+        ax.add_collection(pixies)
+        sca = map.scatter(x,y,c = col,s=1,edgecolors='none',vmin=min,vmax=max)
+
+
+    if cbarmult is not None:
+        cbarlabel = cbarlabel.format(cbarmult)
+
+    if cbarform is not None:
+        cb = pl.colorbar(format=cbarform, pad = 0.1)
+        cb.set_label(cbarlabel)
+    else:
+        cb = pl.colorbar(pad = 0.1)
+        cb.set_label(cbarlabel)
+
+    if step is not None:
+        step = 2*step
+        ticks = np.arange(min,max+step/10.,step)
+        if cbarmult is not None and cbarform is not None:
+            labels = [('{:'+cbarform[1:]+'}').format(ti/10**cbarmult) for ti in ticks]
+        elif cbarmult is None and cbarform is not None:
+            labels = [('{:'+cbarform[1:]+'}').format(ti) for ti in ticks]
+        else:
+            labels = ['{}'.format(ti) for ti in ticks]
+        cb.set_ticks(ticks)
+        cb.set_ticklabels(labels)
+        cb.set_label(cbarlabel)
 
     vip4x, vip4y = map(360-vip4_lon,vip4_lat)
 
@@ -88,6 +254,36 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',min=None,max=None,t
     return
 
 
+def pixel_proj(coords,color=None,alpha=0.5,edgecolors='none'):
+    """
+    From the list of the pixel edges returns a PatchCollection to plot on the map. Optionally the color of the color of the pixels can be set already.
+    :param coords: array 2 x 4 x ndim -> [[[x11,y11],[x12,y12],...] .. [[xn1,yn1], ... ] .. ]
+    :param color: array ndim
+    :param alpha: transparency of the color
+    :return: PatchCollection
+    """
+
+    import matplotlib.cm as cm
+    from matplotlib.patches import Polygon
+    from matplotlib.collections import PatchCollection
+
+    patches = []
+
+    for pixels in coords:
+        vertici = [zi for zi in pixels]
+        polygon = Polygon(np.array(vertici), True)
+        patches.append(polygon)
+
+    p = PatchCollection(patches, cmap=cm.jet, alpha=alpha, edgecolors=edgecolors)
+
+    if color is not None:
+        p.set_array(np.array(color))
+
+    #ax.add_collection(p)
+    #pl.show()
+    return p
+
+
 def stereomap(lon,lat,col,nomefi=None,polo='N',min=0,max=0,title='',show=False,lonlat=False,xres=50,lonres=180,latres=30,
               ncont=15,form=False,addpoints=False,condpo=None,divide=False):
     """
@@ -108,7 +304,7 @@ def stereomap(lon,lat,col,nomefi=None,polo='N',min=0,max=0,title='',show=False,l
 
     aur_lon_0,aur_lat,aur_lon,aur_theta = leggi_map_aur(polo)
 
-    map.drawmeridians(np.arange(0,360,30),labels=[1,1,0,1],fontsize=10)
+    map.drawmeridians(np.arange(0,360,30),labels=[1,1,1,1],fontsize=10,fmt=fmt)
 
     x, y = map(lon,lat)
     # print(x,y)
@@ -190,30 +386,31 @@ def stereomap(lon,lat,col,nomefi=None,polo='N',min=0,max=0,title='',show=False,l
 
     if lonlat:
         if(min == max):
-            pl.contourf(xg, yg, cols,ncont)
+            cont = pl.contourf(xg, yg, cols,ncont)
         else:
             levels = np.linspace(min,max,ncont+1)
             cols[(cols > max)] = max
             cols[(cols < min)] = min
-            pl.contourf(xg, yg, cols,levels=levels)
+            cont = pl.contourf(xg, yg, cols,levels=levels)
         #cs = pl.contour(xg, yg, cols,ncont)
         #pl.clabel(cs, inline=1,fontsize=10)#,manual=manual_locations)
     else:
         if(min == max):
-            pl.contourf(xgri, ygri, cols,ncont)
+            cont = pl.contourf(xgri, ygri, cols,ncont)
         else:
             cols[(cols > max)] = max
             cols[(cols < min)] = min
             levels = np.linspace(min,max,ncont+1)
             if divide:
-                pl.contourf(xgri, ygri, cols/np.sqrt(num),levels=levels)
+                cont = pl.contourf(xgri, ygri, cols/np.sqrt(num),levels=levels)
             else:
-                pl.contourf(xgri, ygri, cols,levels=levels)
+                cont = pl.contourf(xgri, ygri, cols,levels=levels)
         #cs = pl.contour(xgri, ygri, cols,ncont)
         #pl.clabel(cs, inline=1,fontsize=10)#,manual=manual_locations)
 
     if form:
-        pl.colorbar(format='%.1e')
+        pl.colorbar(format='%.1e'
+                    )
     else:
         pl.colorbar()
 
@@ -248,7 +445,7 @@ def stereomap(lon,lat,col,nomefi=None,polo='N',min=0,max=0,title='',show=False,l
 
 
 def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title='',show=False,lonlat=False,xres=50,lonres=180,
-               latres=30,ncont=15,form=False,addpoints=False,condpo=None,minnum=2,image=False,
+               latres=30,ncont=15,step=None,cbarform=None, cbarlabel = '', cbarmult = None, addpoints=False,condpo=None,minnum=2,image=False,
                interp='nearest',npoints=False,aur_model='stat',live=False, pdf=None):
     """
     Plots points on an ortho- or a stereographic map with colors.
@@ -259,7 +456,7 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
     rsp = [71492.,66854.]
     pl.close()
     fig = pl.figure(figsize=(8, 6), dpi=150)
-    pl.title(title)
+    pl.title(title, y=1.05)
 
     if polo == 'N':
         blat = 55
@@ -284,7 +481,7 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
     stat_x = stat_x+x0
     stat_y = stat_y+y0
 
-    map.drawmeridians(np.arange(0,360,30),labels=[1,1,0,1],fontsize=10)
+    map.drawmeridians(np.arange(0,360,30),labels=[1,1,1,1],fontsize=10,fmt=fmt)
 
     x, y = map(lon,lat)
     # print(x,y)
@@ -366,14 +563,22 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
 
     #pl.pcolormesh(xg, yg, cols)
 
+    #cols[20,40]=np.nan
+    conan = np.isnan(cols)
+    cols = np.ma.MaskedArray(cols,conan)
+
+    if step is not None:
+        ncont = np.ceil((max-min)/step)
+        max = min+ncont*step
+
     if lonlat:
         if(min == max):
-            pl.contourf(xg, yg, cols,ncont)
+            cont = pl.contourf(xg, yg, cols,ncont,corner_mask = True)
         else:
             levels = np.linspace(min,max,ncont+1)
             cols[(cols > max)] = max
             cols[(cols < min)] = min
-            pl.contourf(xg, yg, cols,levels=levels)
+            cont = pl.contourf(xg, yg, cols,levels=levels,corner_mask = True)
         #cs = pl.contour(xg, yg, cols,ncont)
         #pl.clabel(cs, inline=1,fontsize=10)#,manual=manual_locations)
     else:
@@ -381,10 +586,10 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
         if(min == max):
             if npoints:
                 lvls = np.logspace(0,3,10)
-                if not image: pl.contourf(xgri, ygri, num,norm=LogNorm(),levels=lvls)
+                if not image: cont = pl.contourf(xgri, ygri, num,norm=LogNorm(),levels=lvls,corner_mask = True)
                 if image: pl.imshow(num, extent=(xgri[0,0], xgri[-1,0], ygri[0,0], ygri[0,-1]),interpolation='nearest')
             else:
-                if not image: pl.contourf(xgri, ygri, cols)
+                if not image: cont = pl.contourf(xgri, ygri, cols,ncont,corner_mask = True)
                 if image: pl.imshow(cols, extent=(xgri[0,0], xgri[-1,0], ygri[0,0], ygri[0,-1]),interpolation='nearest')#, cmap=cm.gist_rainbow)
         else:
             cols[(cols > max)] = max
@@ -392,20 +597,37 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
             levels = np.linspace(min,max,ncont+1)
             if npoints:
                 lvls = np.logspace(0,3,10)
-                if not image: pl.contourf(xgri, ygri, num,norm=LogNorm(),levels=lvls)
+                if not image: cont = pl.contourf(xgri, ygri, num,norm=LogNorm(),levels=lvls,corner_mask = True)
                 if image: pl.imshow(num, extent=(xgri[0,0], xgri[-1,0], ygri[0,0], ygri[0,-1]),interpolation='nearest')#, cmap=cm.gist_rainbow)
             else:
                 print(ext)
                 #pl.scatter(xgri[0,0],ygri[0,0],s=10)
                 if image: pl.imshow(cols.T, origin='lower', extent=ext,interpolation='nearest')#, cmap=cm.gist_rainbow)
-                if not image: pl.contourf(xgri, ygri, cols,levels=levels)
+                if not image: cont = pl.contourf(xgri, ygri, cols,levels=levels,corner_mask = True)
         #cs = pl.contour(xgri, ygri, cols,ncont)
         #pl.clabel(cs, inline=1,fontsize=10)#,manual=manual_locations)
 
-    if form:
-        pl.colorbar(format='%.1e')
+    if cbarmult is not None:
+        cbarlabel = cbarlabel.format(cbarmult)
+
+    if cbarmult is not None and cbarform is not None:
+        try:
+            ticks = levels[::2]
+        except:
+            levels = cont.levels
+            ticks = levels[::2]
+        ticklab = [('{:'+cbarform[1:]+'}').format(ti/10**cbarmult) for ti in ticks]
+        cb = pl.colorbar(pad = 0.1)
+        cb.set_ticks(ticks)
+        cb.set_ticklabels(ticklab)
+        cb.set_label(cbarlabel)
     else:
-        pl.colorbar()
+        if cbarform is not None:
+            cb = pl.colorbar(format=cbarform, pad = 0.1)
+            cb.set_label(cbarlabel)
+        else:
+            cb = pl.colorbar(pad = 0.1)
+            cb.set_label(cbarlabel)
 
     if addpoints:
         if(condpo is None):
@@ -421,6 +643,8 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',min=0,max=0,title=
             print(condpo)
             print(len(condpo))
             sca = pl.scatter(x[condpo],y[condpo],color='black',marker='o',s=1)
+
+    #pl.scatter(xgri[conan],ygri[conan],color='black',marker='o',s=1)
 
     vip4x, vip4y = map(360-vip4_lon,vip4_lat)
 
@@ -477,7 +701,7 @@ def stereopos(lon,lat,nomefi,color='black',marker='.',polo='N',title='',show=Fal
 
     aur_lon_0,aur_lat,aur_lon,aur_theta = leggi_map_aur(polo)
 
-    map.drawmeridians(np.arange(0,360,30),labels=[1,1,0,1],fontsize=10)
+    map.drawmeridians(np.arange(0,360,30),labels=[1,1,1,1],fontsize=10,fmt=fmt)
 
     x, y = map(lon,lat)
 
@@ -803,6 +1027,17 @@ def write_obs_JIR(freq,spe,mask,filename,comment=''):
 
     infile.close()
     return
+
+
+def read_sim_jir(filename):
+    infile = open(filename, 'r')
+    data = [line.split() for line in infile]
+    data_arr = np.array(data)
+    wl = np.array([float(r) for r in data_arr[:, 0]])
+    data = np.array([float(r) for r in data_arr[:, 1]])
+    sim = np.array([float(r) for r in data_arr[:, 2]])
+    infile.close()
+    return wl, data, sim
 
 
 def read_res_jir(filename):

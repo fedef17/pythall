@@ -8,6 +8,8 @@ import os.path
 import matplotlib.pyplot as pl
 import math as m
 from numpy import linalg as LA
+from scipy.constants import constants as const
+
 
 #parameters
 Rtit = 2575.0 # km
@@ -17,25 +19,33 @@ c_R = 8.31446 # J K-1 mol-1
 c_G = 6.67408e-11 # m3 kg-1 s-2
 
 
-#################### DEFINE classes! ###############
+#####################################################################################################################
+#####################################################################################################################
+###############################             FUNZIONI                 ################################################
+#####################################################################################################################
+#####################################################################################################################
 
 class Pixel(object):
     """
     Each instance is a pixel, with all useful things of a pixel. Simplified version with few attributes.
     """
 
-    def __init__(self, cube, year, dist, lat, alt, sza, phang, wl, spe, bbl):
-        self.cube = cube
-        self.year = year
-        self.dist = dist
-        self.lat = lat
-        self.alt = alt
-        self.sza = sza
-        self.phang = phang
-        self.wl = np.array(wl)
-        self.spe = np.array(spe)
-        self.bbl = np.array(bbl)
-
+    def __init__(self, keys = None, things = None):
+        if keys is None:
+            return
+        for key, thing in zip(keys,things):
+            setattr(self,key,thing)
+        # self.cube = cube
+        # self.year = year
+        # self.dist = dist
+        # self.lat = lat
+        # self.alt = alt
+        # self.sza = sza
+        # self.phang = phang
+        # self.wl = np.array(wl)
+        # self.spe = np.array(spe)
+        # self.bbl = np.array(bbl)
+        return
 
     def plot(self, range=None, mask=True, show=True, nomefile=None):
         """
@@ -44,9 +54,9 @@ class Pixel(object):
         :return:
         """
         if range is not None:
-            ok = (self.wl >= range[0]) & (self.wl <= range[1]) & (self.bbl == 1)
+            ok = (self.wl >= range[0]) & (self.wl <= range[1]) & (self.mask == 1)
         else:
-            ok = (self.bbl == 1)
+            ok = (self.mask == 1)
 
         fig = pl.figure(figsize=(8, 6), dpi=150)
         pl.plot(self.wl[ok],self.spe[ok])
@@ -60,7 +70,7 @@ class Pixel(object):
 
         return
 
-    def integr(self, range=None):
+    def integr(self, range=None, fondo = 0.0):
         """
         Integrates the spectrum in the selected range. If no range the full spectrum is integrated.
         """
@@ -68,8 +78,8 @@ class Pixel(object):
         if range is None:
             range = [np.min(self.wl),np.max(self.wl)]
 
-        cond = (self.wl >= range[0]) & (self.wl <= range[1])
-        intt = np.trapz(self.spe[cond],x=self.wl[cond])
+        cond = (self.wl >= range[0]) & (self.wl <= range[1]) & (self.mask == 1)
+        intt = np.trapz(self.spe[cond]-fondo,x=self.wl[cond])
 
         return intt
 
@@ -95,65 +105,344 @@ class PixelSet(np.ndarray):
         if obj is None: return
         self.descr = getattr(obj, 'descr', None)
         for name in obj[0].__dict__.keys():
-            setattr(self,name,np.array([getattr(pix,name) for pix in obj]))
-
-    def read_res(self, cart=''):
-        """
-        Leggi i risultati da cart e appiccicali ai pixel. Crea nuovi attributi anche per PixelSet.
-        :param cart:
-        :return:
-        """
-        fit_results = ['h3p_col','h3p_temp','err_col','err_temp','ch4_col','err_ch4','chisq','offset','wl_shift']
-        for attr in fit_results:
-            print(attr)
-            #leggi
-            for pix in self.pixels:
-                pix.add_res(attr,res)
-            #appiccica ai pixel
-            #vettorizza
-        print('da scrivere')
+            try:
+                setattr(self,name,np.array([getattr(pix,name) for pix in self]))
+            except:
+                setattr(self,name+'_ok',np.array([getattr(pix,name) for pix in self]))
         return
 
     def ciao(self):
         print('ciao')
         return
 
-    def ortomap(self, attr):
-        print('da scrivere')
-        attr_to_plot = getattr(self,attr)
-        jirfu.ortomap(self.lat,self.lon,attr_to_plot)
+    def integr_tot(self, key=None, **kwargs):
+        intg = np.array([pix.integr(**kwargs) for pix in self])
+        if key is not None:
+            setattr(self,key,intg)
+            for pix,intg1 in zip(self,intg):
+                setattr(pix,key,intg1)
+        return intg
+
+
+class Molec(np.ndarray):
+    """
+    Class to represent molecules, composed by isotopes
+    """
+
+    def __new__(cls, input_array, descr=None):
+        obj = np.asarray(input_array).view(cls)
+        obj.descr = descr
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self.descr = getattr(obj, 'descr', None)
+        # qui gli altri attributi che ci voglio mettere
+        # self.abundance = BLA
         return
 
-    # def __init__(self, descr='', pixels=None):
-    #     self.descr = descr
-    #     if pixels is not None:
-    #         self.pixels = pixels
-    #         for name in pixels[0].__dict__.keys():
-    #             setattr(self,name,np.array([getattr(pix,name) for pix in pixels]))
-            # self.cube = np.array([pix.cube for pix in pixels])
-            # self.year = year
-            # self.dist = dist
-            # self.lat = lat
-            # self.alt = alt
-            # self.sza = sza
-            # self.phang = phang
-            # self.wl = np.array(wl)
-            # self.spe = np.array(spe)
-            # self.bbl = np.array(bbl)
 
-    # def _wrapped_method(nome):
-    #     return
+class IsoMolec(object):
+    """
+    Class to represent isotopes, with iso-ratios, vibrational levels, vib. temperatures, (for now).
+    """
+
+    def __init__(self, mol, iso, levels, lev_energy, MM=None, ratio=None):
+        self.mol = mol   # mol number
+        self.iso = iso   # iso number
+        if MM is not None: self.MM = MM   # mol mass
+        if ratio is not None: self.ratio = ratio   # isotopic ratio
+        i=0
+        str = 'vib_{:02d}'.format(i)
+        for lev in levels:
+            setattr(self,str,lev)
+                ##### MI sono incartato nel punto in cui cercavo di capire che cazzo voglio come output di sta funzione di merda
+
+
+class Level(object):
+    """
+    Class to represent one single vibrational level of a molecule. Contains HITRAN strings, energy, degeneration.
+    Planned: decomposition of HITRAN strings in vib quanta.
+    """
+
+    def __init__(self, levstring, energy, degen = None):
+        self.level = levstring
+        self.energy = energy
+        self.degen = degen
+        self.alts = None
+        self.vibtemp = None
+        return
+
+    def addclim(self,alts,vibtemp):
+        ##### MI sono incartato nel punto in cui cercavo di capire che cazzo voglio come output di sta funzione di merda
+        pass
+
+
+class AtmProfile(np.ndarray):
+    """
+    Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
+    Contains a set of interp strings to determine the type of interpolation.
+    Input:
+        grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza) ..
+        gridname -------> names for the dimensions of grid
+        profile --------> profile : same dimensions as grid
+        interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
+        hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
+    """
+
+    def __new__(cls, grid, profile, gridname = None, interp=None, hierarchy = None, descr=None):
+        obj = np.asarray(profile).view(cls)
+        obj.descr = descr
+        obj.grid = grid
+        if obj.ndim != grid.ndim-1 : raise ValueError('profile and grid have different dimensions!')
+
+        if interp is not None:
+            for ino in interp:
+                nam = ['lin','exp','box']
+                try:
+                    nam.index(ino)
+                except ValueError:
+                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
+            obj.interp = np.array(interp)
+        else:
+            obj.interp = np.array(['lin']*obj.ndim)
+            print('No interp found, interp set to default: {}'.format(obj.interp))
+
+        if gridname is not None:
+            obj.gridname = np.array(gridname)
+            for name,coord in gridname,grid:
+                setattr(obj,name,coord)
+        else:
+            obj.gridname = np.array(['']*obj.ndim)
+            print('No gridname set. Enter names for the coordinate grid')
+
+        if hierarchy is not None:
+            obj.hierarchy = np.array(hierarchy)
+        else:
+            obj.hierarchy = np.arange(obj.ndim)
+            print('No hierarchy found, hierarchy set to default: {}'.format(obj.hierarchy))
+        for val in np.unique(obj.hierarchy):
+            oi = (obj.hierarchy == val)
+            if len(np.unique(obj.interp[oi])) > 1:
+                raise ValueError('Can not interpolate 2D between int and exp coordinates!')
+            elif np.unique(obj.interp[oi])[0] == 'exp':
+                raise ValueError('Can not interpolate 2D between exp coordinates!')
+
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self.descr = getattr(obj, 'descr', None)
+        self.grid = getattr(obj, 'grid', None)
+        self.prof = getattr(obj, 'profile', None)
+        self.interp = getattr(obj, 'interp', None)
+        self.hierarchy = getattr(obj, 'hierarchy', None)
+        return
+
+    def calc(self, point):
+        """
+        Interpolates the profile at the given point.
+        :param point: np.array point to be considered. len(point) = self.ndim
+        :return:
+        """
+
+# my commit
+
+        if len(point) != self.ndim:
+            raise ValueError('Point should have {:1d} dimensions, instead has {:1d}'.format(self.ndim,point.ndim))
+
+        value = interp(self, self.grid, point, itype=self.interp, hierarchy=self.hierarchy)
+
+        return value
+
+    def collapse(self, coords):
+        """
+        Returns the profile corresponding to the selected coordinates. If all coordinates are specified returns the scalar value from calc.
+        :param coords:
+        :return:
+        """
+        pass
+
+
+#### FINE AtmProfile class
+
+def interp(prof, grid, point, itype=None, hierarchy=None):
+    """
+    Returns the a matrix of dims ndim x 2, with indexes of the two closest values among the grid coordinates to the point coordinate.
+    :param point: 1d array with ndim elements, the point to be considered
+    :param grid: np.mgrid() array (ndim+1)
+    :param prof: the profile to be interpolated (ndim array)
+    :param itype: type of interpolation in each dimension, allowed values: 'lin', 'exp', 'box', '1cos'
+    :param hierarchy: order for interpolation
+    :return:
+    """
+    ndim = len(point)
+
+    if itype is None:
+        itype = np.array(ndim*['lin'])
+    if hierarchy is None:
+        hierarchy = np.arange(ndim)
+
+    # Calcolo i punti di griglia adiacenti, con i relativi pesi
+    indxs = []
+    weights = []
+    for p, arr, ity in zip(point,grid,itype):
+        indx, wei = find_between(np.unique(arr),p,ity)
+        indxs.append(indx)
+        weights.append(wei)
+
+    # mi restringo l'array ad uno con solo i valori che mi interessano
+    profi = prof
+    for i in range(ndim):
+        profi = np.take(profi,indxs[i],axis=i)
+    print(np.shape(profi))
+
+    # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente
+    hiesort = np.argsort(hierarchy)
+    profint = profi
+    for ax in hiesort:
+        vals = [np.take(profint,ind,axis=ax) for ind in indxs[ax]]
+        profint = int1d(vals,weights[ax],itype[ax])
+
+    return profint
+
+    # ok, tu vuoi aggiornare grid_weights con le nuove weights? o già dargli un valore interpolato? la seconda? No, aspaspasp.
+    # Allora per le dimensioni che tratto insieme va bene avere un unico schema di grid_weights. MA SE i grid_weights restassero separati nelle diverse dimensioni,
+    # cioè se avesse la dimensione di grid? così li calcolo tutti ad una volta e mi salto un sacco di cazzzzzzi, oh yeah. Poi fuori da questa funzione capisco come fare!
+
+    #sono arrivato quiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+
+    # adesso voglio che value sia una matr con le dim di profile che ha tutto 0 tranne nei punti coinvolti nella media dove ha il peso relativo
+    # ora per adesso posso lasciare degli 1 nei punti coinvolti e mano a mano che interpolo aggiorno i pesi
+    # cioè ad ogni livello di hierarchy moltiplico i punti per il peso che hanno nel nuovo livello
+    # mm ancora un po' confuso.
+    # cioè da qui devono uscire gli indici dei punti coinvolti
+
+
+    ##### MI sono incartato nel punto in cui cercavo di capire che cazzo voglio come output di sta funzione di merda
+
+    # meglio fare un where che funziona benissimo
+    # tanto gli step sono fissi no diocane eh vabbè però pure te....
+    # basta fare un where con la distanza dal punto per ogni coord minore di step/2
+    # vabbè insomma mi trovo sti due punti, e ok. poi i valori delle griglie sopra e sotto li uso nella ricerca e estraggo una sottomatrice
     #
-    # def _wrapped_attr(self, attr):
-    #     return
-    #
-    # wrapped_attr = ('cube', 'dist', 'sza', 'spe', 'bbl', 'wl', 'year', 'lat', 'alt', 'phang')
-    # for attr in wrapped_attr:
-    #     setattr(Set,attr,_wrapped_attr(attr))
+    # In[242]: cond = ((mgr[0,] == 80) | (mgr[0,] == 90)) & ((mgr[1,] == 110) | (mgr[1,] == 120))
+    # In[243]: vec[cond]
+    # Out[236]: array([ 320.,  320.,  360.,  360.])
+    # In[244]: mgr[0,cond]
+    # Out[237]: array([ 80.,  80.,  90.,  90.])
+    # In[245]: mgr[1,cond]
+    # Out[238]: array([ 110.,  120.,  110.,  120.])
+
+
+def int1d(vals,weights,itype):
+    """
+    Given the two values with relative weights, gives the interpolated value according to itype.
+    :param vals: list[2] the two objects: can be scalars or ndarrays
+    :param weights: list[2] the two weights
+    :param itype: 'lin','exp','box','1cos'
+    :return: intval, the interpolated value
+    """
+
+    if itype == 'lin' or itype == '1cos' or itype == 'box': # linear interpolation
+        intval = weights[0]*vals[0]+weights[1]*vals[1]
+    elif itype == 'exp':
+        intval = np.exp(weights[0]*np.log(vals[0])+weights[1]*np.log(vals[1]))
+    else:
+        raise ValueError('No interpolation type found for int1d')
+
+    return intval
+
+
+def find_between(array,value,interp='lin'):
+    """
+    Returns the indexes of the two closest points in array and the relative weights for interpolation.
+    :param array: grid Array
+    :param value: value requested
+    :param interp: type of weighting ('lin' -> linear interpolation,'exp' -> exponential interpolation,
+    'box' -> nearest neighbour,'1cos' -> 1/cos(x) for SZA values)
+    :return:
+    """
+    ndim = array.ndim
+    dists = np.sort(np.abs(array-value))
+    indxs = np.argsort(np.abs(array-value))
+    vals = array[indxs][0:2]
+    idx = indxs[0:2]
+    dis = dists[0:2]
+    weights = np.array(weight(value,vals[0],vals[1],itype=interp))
+    return idx, weights
+
+
+def weight(p,pg1,pg2,itype='lin'):
+    """
+    Weight of pg1 and pg2 in calculating the interpolated value p, according to type.
+    :param pg1: Point 1 in the grig
+    :param pg2: Point 2 in the grid
+    :param itype: 'lin' : (1-difference)/step; 'exp' : (1-log difference)/log step; 'box' : 1 closer, 0 the other; '1cos' : (1-1cos_diff)/1cos_step
+    :return:
+    """
+    w1 = 0
+    w2 = 0
+    if itype == 'lin':
+        w1 = 1-abs(p-pg1)/abs(pg2-pg1)
+        w2 = 1-abs(p-pg2)/abs(pg2-pg1)
+    elif itype == 'exp':
+        pg1log = np.log(pg1)
+        pg2log = np.log(pg2)
+        plog = np.log(p)
+        w1 = 1-abs(plog-pg1log)/abs(pg2log-pg1log)
+        w2 = 1-abs(plog-pg2log)/abs(pg2log-pg1log)
+    elif itype == 'box':
+        if abs(p-pg1) < abs(p-pg2):
+            w1=1
+            w2=0
+        else:
+            w1=0
+            w2=1
+    elif itype == '1cos':
+        pg11cos = 1/np.cos(rad(pg1))
+        pg21cos = 1/np.cos(rad(pg2))
+        p1cos = 1/np.cos(rad(p))
+        w1 = 1-abs(p1cos-pg11cos)/abs(pg21cos-pg11cos)
+        w2 = 1-abs(p1cos-pg21cos)/abs(pg21cos-pg11cos)
+
+    return w1, w2
+
+
+def dist(p1,p2):
+    """
+    Distance between two points in ndim.
+    :param p1: Point 1
+    :param p2: Point 2
+    :return:
+    """
+    dist = 0
+    for e1,e2 in zip(p1,p2):
+        dist += (e1-e2)**2
+    dist = m.sqrt(dist)
+
+    return dist
 
 
 
-#### Funzioni
+#####################################################################################################################
+#####################################################################################################################
+###############################             FUNZIONI                 ################################################
+#####################################################################################################################
+#####################################################################################################################
+
+
+
+
+
+def interpNd(arr,grid,point):
+    """
+    Interpolates
+    :param arr:
+    :param point:
+    :return:
+    """
+
 
 def trova_spip(file, hasha = '#'):
     """
@@ -165,6 +454,7 @@ def trova_spip(file, hasha = '#'):
         gigi = linea[0]
     else:
         return
+
 
 def read_obs(filename):
     """
@@ -320,11 +610,13 @@ def read_input_prof_gbb(filename, type, n_alt = 151, alt_step = 10.0, n_gas = 86
     return proftot
 
 
-def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0):
+def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0, nlat = 4, descr = ''):
     """
     Writes input profiles in gbb standard formatted files (in_temp.dat, in_pres.dat, in_vmr_prof.dat)
     :return:
     """
+    from datetime import datetime
+
     alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
 
     infile = open(filename, 'w')
@@ -339,8 +631,13 @@ def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0):
     if(type == 'pres'):
         strin = '{:11.4e}'
 
+    data = datetime.now()
+    infile.write(descr+'\n')
+    infile.write('\n')
+    infile.write('Processed on: {}\n'.format(data))
     infile.write('{:1s}\n'.format('#'))
-    writevec(infile,prof[::-1],n_per_line,strin)
+    for i in range(nlat):
+        writevec(infile,prof[::-1],n_per_line,strin)
 
     return
 
@@ -748,13 +1045,11 @@ def szafromssp(lat, lon, lat_ss, lon_ss):
 
 
 def rad(ang):
-    pi = 2 * acos(0.0)
-    return ang*pi/180.0
+    return ang*np.pi/180.0
 
 
 def deg(ang):
-    pi = 2 * acos(0.0)
-    return ang*180.0/pi
+    return ang*180.0/np.pi
 
 
 def sphtocart(lat, lon, h=0., R=Rtit):
