@@ -7,7 +7,7 @@ import sys
 import os.path
 import matplotlib.pyplot as pl
 import matplotlib.cm as cm
-import math as m
+import math as mt
 from numpy import linalg as LA
 import scipy.constants as const
 import warnings
@@ -546,7 +546,7 @@ def dist(p1,p2):
     dist = 0
     for e1,e2 in zip(p1,p2):
         dist += (e1-e2)**2
-    dist = m.sqrt(dist)
+    dist = mt.sqrt(dist)
 
     return dist
 
@@ -566,7 +566,7 @@ def integr_sol(wl, spe, wl_range = None, sol_lim = None):
     if wl_range is None:
         wl_range = [np.min(wl),np.max(wl)]
 
-    cond = (wl > Range[0]) & (wl < Range[1]) & (~np.isnan(spe))
+    cond = (wl > wl_range[0]) & (wl < wl_range[1]) & (~np.isnan(spe))
     if sol_lim is not None:
         p1_cond = (wl > sol_lim[0][0]) & (wl < sol_lim[0][1])
         p2_cond = (wl > sol_lim[1][0]) & (wl < sol_lim[1][1])
@@ -637,9 +637,9 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     expo, clab = cbar_things(levels)
     quant = quant/10**expo
     levels = levels/10**expo
-    pl.contourf(x,y,quant,corner_mask = True,levels = levels, extend = 'both')
     if lines:
         pl.contour(x,y,quant,levels = levels)
+    pl.contourf(x,y,quant,corner_mask = True,levels = clevels, extend = 'both')
 
     cb = pl.colorbar(format=cbarform, pad = 0.1)
     cb.set_label(cbarlabel.format(clab))
@@ -1169,7 +1169,7 @@ def HG_phase_funct(deg,g):
     :param g: asymmetry factor (from 0 to 1)
     :return:
     """
-    phunc=(1.0/(4.0*m.pi))*(1.0-g**2)/(1.0+g**2+2.0*g*m.cos(deg))**1.5
+    phunc=(1.0/(4.0*mt.pi))*(1.0-g**2)/(1.0+g**2+2.0*g*mt.cos(deg))**1.5
 
     return phunc
 
@@ -1268,9 +1268,9 @@ def read_rannou_aer(filename):
 
 
 def gaussian(x, mu, fwhm):
-    pi = m.acos(-1)
-    sig = fwhm / (2*m.sqrt(2*m.log(2.0)))
-    fac = m.sqrt(2*pi)*sig
+    pi = mt.acos(-1)
+    sig = fwhm / (2*mt.sqrt(2*mt.log(2.0)))
+    fac = mt.sqrt(2*pi)*sig
     return np.exp(-(x - mu)**2 / (2 * sig**2)) / fac
 
 
@@ -1615,10 +1615,10 @@ def szafromsspDEG(lat, lon, lat_ss, lon_ss):
     lon = lon * np.pi / 180.0
     lat_ss = lat_ss *np.pi/180.0
     lon_ss = lon_ss *np.pi/180.0
-    sc_prod = m.cos(lat) * m.cos(lat_ss) * m.cos(lon) * m.cos(lon_ss) \
-              + m.cos(lat) * m.cos(lat_ss) * m.sin(lon) * m.sin(lon_ss) \
-              + m.sin(lat) * m.sin(lat_ss)
-    sza = m.acos(sc_prod) * 180.0 / np.pi
+    sc_prod = mt.cos(lat) * mt.cos(lat_ss) * mt.cos(lon) * mt.cos(lon_ss) \
+              + mt.cos(lat) * mt.cos(lat_ss) * mt.sin(lon) * mt.sin(lon_ss) \
+              + mt.sin(lat) * mt.sin(lat_ss)
+    sza = mt.acos(sc_prod) * 180.0 / np.pi
     return sza
 
 
@@ -1627,10 +1627,10 @@ def szafromssp(lat, lon, lat_ss, lon_ss):
     Returns sza at certain (lat, lon) given (lat_ss, lon_ss) of the sub_solar_point.
     All angles in radians.
     """
-    sc_prod = m.cos(lat) * m.cos(lat_ss) * m.cos(lon) * m.cos(lon_ss) \
-              + m.cos(lat) * m.cos(lat_ss) * m.sin(lon) * m.sin(lon_ss) \
-              + m.sin(lat) * m.sin(lat_ss)
-    sza = m.acos(sc_prod)
+    sc_prod = mt.cos(lat) * mt.cos(lat_ss) * mt.cos(lon) * mt.cos(lon_ss) \
+              + mt.cos(lat) * mt.cos(lat_ss) * mt.sin(lon) * mt.sin(lon_ss) \
+              + mt.sin(lat) * mt.sin(lat_ss)
+    sza = mt.acos(sc_prod)
     return sza
 
 
@@ -1649,7 +1649,7 @@ def sphtocart(lat, lon, h=0., R=Rtit):
     h is the altitude with respect to the spherical surface. R_p is the planet radius.
     :return: 3D numpy array
     """
-    r = [m.cos(lat)*m.cos(lon), m.cos(lat)*m.sin(lon), m.sin(lat)]
+    r = [mt.cos(lat)*mt.cos(lon), mt.cos(lat)*mt.sin(lon), mt.sin(lat)]
     r = np.array(r)
     r *= (R + h)
     return r
@@ -1673,7 +1673,7 @@ def LOS_2D(alt_tg,alts,T,P,gas_ok,ext_coef,Rpl=2575.0):
     Rtoa = np.max(alts)
     step = 10.0 # step in km
     _LOS = np.array([1,0])
-    R_0 = np.array([-(m.sqrt((Rtoa+Rpl)**2-(Rpl+alt_tg)**2)),Rpl+alt_tg]) # first LOS point
+    R_0 = np.array([-(mt.sqrt((Rtoa+Rpl)**2-(Rpl+alt_tg)**2)),Rpl+alt_tg]) # first LOS point
 
     R = R_0 + step * _LOS #first step
     #print(R_0)
@@ -1802,7 +1802,7 @@ def BB(T,w):
     rc1 = 1.1904e-3
     rhck = 1.4388
 
-    BB = rc1 * w**3 / (m.exp(w*rhck/T)-1)
+    BB = rc1 * w**3 / (mt.exp(w*rhck/T)-1)
 
     return BB
 
@@ -1818,9 +1818,9 @@ def BB_nm(T,w):
     rhck = 1.4388
 
     if T*w > 5e5 :
-        BB = rc1 * m.pow((1.e4/w),5) / (m.exp(1.e7/w*rhck/T)-1)
+        BB = rc1 * mt.pow((1.e4/w),5) / (mt.exp(1.e7/w*rhck/T)-1)
     else:
-        BB = rc1 * m.pow((1.e4/w),5) * m.exp(-1.e7/w*rhck/T)
+        BB = rc1 * mt.pow((1.e4/w),5) * mt.exp(-1.e7/w*rhck/T)
 
     return BB
 
