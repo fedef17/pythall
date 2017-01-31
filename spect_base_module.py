@@ -613,6 +613,10 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     :param cbarlabel: Label for the colorbar. Should contain a {} for exponential in the units, if needed.
     """
 
+    if type(quant) is not np.ma.core.MaskedArray:
+        conan = np.isnan(quant)
+        quant = np.ma.MaskedArray(quant, conan)
+
     if live:
         pl.ion()
 
@@ -631,17 +635,22 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
 
     if continuum:
         clevels = np.linspace(levels[0],levels[-1],100)
+        pre = np.linspace(np.min(quant.compressed()), levels[0], 10)
+        post = np.linspace(levels[-1], np.max(quant.compressed()), 10)
+        clevels = np.append(pre, clevels)
+        clevels = np.append(clevels, post)
     else:
         clevels = levels
 
     expo, clab = cbar_things(levels)
     quant = quant/10**expo
     levels = levels/10**expo
-    if lines:
-        pl.contour(x,y,quant,levels = levels)
-    pl.contourf(x,y,quant,corner_mask = True,levels = clevels, extend = 'both')
 
-    cb = pl.colorbar(format=cbarform, pad = 0.1)
+    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, extend = 'both')
+    if lines:
+        zol = pl.contour(x,y,quant,levels = levels, color = 'white')
+
+    cb = pl.colorbar(mappable = zuf, format=cbarform, pad = 0.1)
     cb.set_label(cbarlabel.format(clab))
 
     lol = nomefile.find('.')
