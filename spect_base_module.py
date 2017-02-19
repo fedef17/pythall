@@ -163,6 +163,17 @@ class Molec(object):
         self.all_iso.append(string)
         return
 
+    def link_to_atmos(self, atmosphere, copy = False):
+        """
+        Creates a link to an AtmProfile object containing temp, pres, ...
+        """
+        if not copy:
+            self.atmosphere = atmosphere
+        else:
+            raise Exception('DEVO ANCORA SCRIVERLO!')
+
+        return
+
 
 class IsoMolec(object):
     """
@@ -215,6 +226,7 @@ class IsoMolec(object):
         return
 
 
+
 class Level(object):
     """
     Class to represent one single vibrational level of a molecule. Contains HITRAN strings, energy, degeneration.
@@ -240,6 +252,7 @@ class Level(object):
 
         return
 
+
 class CosaScema(np.ndarray):
     """
     Sottoclasse scema di ndarray.
@@ -248,6 +261,10 @@ class CosaScema(np.ndarray):
         print(1, 'dentro new')
         obj = np.asarray(profile).view(cls)
         print(4,type(obj),obj.ciao)
+        try:
+            print(4.1,type(self),self.ciao)
+        except Exception as stup:
+            print(4.1,stup)
         obj.ciao = ciao
         print(5,type(obj),obj.ciao)
         return obj
@@ -257,11 +274,201 @@ class CosaScema(np.ndarray):
         if obj is None: return
         self.ciao = getattr(obj,'ciao',None)
         print(3, type(self), type(obj))
-        print(3, self.ciao, getattr(obj,'ciao',None))
+        print(3.1, self.ciao, getattr(obj,'ciao',None))
         return
 
 
-class AtmProfile(np.ndarray):
+class AtmProfile(object):
+    """
+    Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
+    Contains a set of interp strings to determine the type of interpolation.
+    Input:
+        grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza). The dimension of the mgrid object is the grid dimension + 1.
+        gridname -------> names for the dimensions of grid
+        profile --------> profile : dim of grid - 1
+        profname ----------> name of the profile (es. 'temp', 'pres', ..)
+        interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
+        hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
+
+    Attributes: names (list of profiles names -> list of strings), [nam for nam in names] (all profiles -> ndarrays), grid (the grid -> np.mgrid), gridname (names of the grid coords -> list of strings), interp (list of interp lists, one per profile), hierarchy (list od hierarchies, one per profile), descr
+    """
+
+    def __init__(self, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
+
+        profile = np.array(profile)
+        grid = np.array(grid)
+        self.descr = descr
+        setattr(self, profname, profile.copy())
+        self.ndim = profile.ndim
+
+        profnames = []
+        profnames.append(profname)
+        self.names = profnames
+
+        if grid.ndim == 1:
+            grid = np.array([grid])
+            print('Transformed grid to a 1-dim grid array',np.shape(grid))
+
+        self.grid = grid.copy()
+        self.interp = []
+        self.hierarchy = []
+
+        if self.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
+
+        if gridname is not None:
+            self.gridname = np.array(gridname)
+            for name,coord in zip(gridname,grid):
+                setattr(self,name,np.sort(np.unique(coord)))
+        else:
+            self.gridname = np.array(['']*self.ndim)
+            print('No gridname set. Enter names for the coordinate grid')
+
+        if interp is not None:
+            for ino in interp:
+                nam = ['lin','exp','box']
+                try:
+                    nam.index(ino)
+                except ValueError:
+                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
+            self.interp.append(np.array(interp))
+        else:
+            interp = np.array(['lin']*self.ndim)
+            if profname == 'pres':
+                indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
+                interp[indx] = 'exp'
+            self.interp.append(np.array(interp))
+            print('No interp found, interp set to default: {}'.format(self.interp[0]))
+
+        if hierarchy is not None:
+            self.hierarchy.append(np.array(hierarchy))
+        else:
+            self.hierarchy.append(np.arange(self.ndim))
+            print('No hierarchy found, hierarchy set to default: {}'.format(self.hierarchy[0]))
+        for val in np.unique(self.hierarchy[0]):
+            oi = (self.hierarchy[0] == val)
+            if len(np.unique(self.interp[0][oi])) > 1:
+                raise ValueError('Can not interpolate 2D between int and exp coordinates!')
+            elif np.unique(self.interp[0][oi])[0] == 'exp' and len(self.interp[0][oi]) > 1:
+                raise ValueError('Can not interpolate 2D between exp coordinates!')
+
+        return
+
+    def add_profile(self, profile, profname, gridname = None, interp=None, hierarchy = None):
+        """
+        Adds a new profile to the atmosphere.
+        """
+        profile = np.array(profile)
+
+        if self.ndim != profile.ndim: raise ValueError('New profile {} is not consistent with {}!'.format(profname, self.names[0]))
+        setattr(self, profname, profile.copy())
+
+        self.names.append(profname)
+
+        if interp is not None:
+            for ino in interp:
+                nam = ['lin','exp','box']
+                try:
+                    nam.index(ino)
+                except ValueError:
+                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
+            interp = np.array(interp)
+            self.interp.append(interp)
+        else:
+            interp = np.array(['lin']*self.ndim)
+            if profname == 'pres':
+                indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
+                interp[indx] = 'exp'
+            self.interp.append(interp)
+            print('No interp found, interp set to default: {}'.format(interp))
+
+        if hierarchy is not None:
+            hierarchy = np.array(hierarchy)
+            self.hierarchy.append(hierarchy)
+        else:
+            hierarchy = np.arange(self.ndim)
+            self.hierarchy.append(hierarchy)
+            print('No hierarchy found, hierarchy set to default: {}'.format(hierarchy))
+        for val in np.unique(hierarchy):
+            oi = (hierarchy == val)
+            if len(np.unique(interp[oi])) > 1:
+                raise ValueError('Can not interpolate 2D between int and exp coordinates!')
+            elif np.unique(interp[oi])[0] == 'exp' and len(interp[oi]) > 1:
+                raise ValueError('Can not interpolate 2D between exp coordinates!')
+
+        return
+
+    # def __getitem__(self, *args, **4kwargs):
+    #     for name in self._all_:
+    #         profilo = getattr(self, name)
+    #         sliced_prof = profilo.__getitem__(*args,**kwargs)
+    #         setattr(obj, name, sliced_prof)
+    #     np.ndarray.__getitem__(self.array_view, *args, **kwargs)
+    #     return
+    #
+    # def __getslice__(self, *args, **kwargs):
+    #     for name in self._all_:
+    #         profilo = getattr(self, name)
+    #         sliced_prof = profilo.__getslice__(*args,**kwargs)
+    #         setattr(obj, name, sliced_prof)
+    #     obj.grid = self.grid
+    #     return obj
+
+
+    def calc(self, point, profname = None):
+        """
+        Interpolates the profile at the given point.
+        :param point: np.array point to be considered. len(point) = self.ndim
+        :param profname: name of the profile to calculate (es: 'temp', 'pres')
+        :return: If only one profile is stored in AtmProfile, the output is a number. If there are more profiles stored in AtmProfile, the output of calc is a dict containing all interpolated values. If profname is set (ex. 'temp') returns the value of the profile 'temp' at the point.
+        """
+        resu = []
+        for nam, i in zip(self.names, range(len(self.names))):
+            prof = getattr(self, nam)
+            value = interp(prof, self.grid, point, itype=self.interp[i], hierarchy=self.hierarchy[i])
+            resu.append(value)
+
+        if len(self.names) == 1:
+            return resu[0]
+        elif profname is not None:
+            dicto = dict(zip(self.names,resu))
+            return dicto[profname]
+        else:
+            return dict(zip(self.names,resu))
+
+
+    def interp_copy(self, nomeprof, new_grid):
+        """
+        Interpolates the original profile nomeprof in the new_grid coords. Returns the interpolated profile.
+        """
+
+        if new_grid.ndim == 1:
+            new_grid = np.array([new_grid])
+
+        new_prof = []
+        for point in zip(*[luii.flat for luii in new_grid]):
+            new_prof.append(self.calc(point, nomeprof))
+
+        return np.array(new_prof)
+
+
+    def collapse(self, coords):
+        """
+        Returns the profile corresponding to the selected coordinates. If all coordinates are specified returns the scalar value from calc.
+        :param coords:
+        :return:
+        """
+        pass
+
+    def smooth_prof(self, points):
+        """
+        Returns a smoothed profile, with spline interpolation. To be used mainly for showing purposes.
+        """
+        pass
+
+
+#### FINE AtmProfile class
+
+class AtmProfile_ndarr(np.ndarray):
     """
     Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
     Contains a set of interp strings to determine the type of interpolation.
@@ -274,21 +481,23 @@ class AtmProfile(np.ndarray):
     """
 
     def __new__(cls, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
-        #print('Sono dentro new')
-        print(cls)
+
         obj = np.asarray(profile).view(cls)
-        #print('Arrivo a questo punto??')
+
         obj.descr = descr
-        obj.grid = grid
-        setattr(obj, profname, profile)
+        setattr(obj, profname, profile.copy())
+
         _all_ = []
         _all_.append(profname)
         obj._all_ = _all_
+
         if grid.ndim == 1:
             grid = np.array([grid])
-            obj.grid = grid
             print('Transformed grid to a 1-dim grid array',np.shape(grid))
-        if obj.ndim != grid.ndim-1 : raise ValueError('profile and grid have different dimensions!')
+
+        obj.grid = grid.copy()
+
+        if obj.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
 
         if interp is not None:
             for ino in interp:
@@ -325,7 +534,6 @@ class AtmProfile(np.ndarray):
         return obj
 
     def __array_finalize__(self, obj):
-        #print('Sono dentro array_finalize')
         if obj is None: return
         self.descr = getattr(obj, 'descr', None)
         self.grid = getattr(obj, 'grid', None)
@@ -642,13 +850,15 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     else:
         clevels = levels
 
+    print('levels: ',levels)
+    print('clevels: ',clevels)
     expo, clab = cbar_things(levels)
     quant = quant/10**expo
     levels = levels/10**expo
 
-    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, extend = 'both')
+    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both')
     if lines:
-        zol = pl.contour(x,y,quant,levels = levels, color = 'white')
+        zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
 
     cb = pl.colorbar(mappable = zuf, format=cbarform, pad = 0.1)
     cb.set_label(cbarlabel.format(clab))
@@ -878,14 +1088,36 @@ def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0, nla
     return
 
 
-def write_tvib_gbb(filename, molecs, temp, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4, descr = '', script=__file__):
+def write_tvib_gbb(filename, molecs, atmosphere, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4, descr = '', script=__file__):
     """
     Writes input in_vibtemp.dat in gbb standard format: nlte ratio.
     :param molecs: has to be a single sbm.Molec object or a list of sbm.Molec objects
-    :param temp: sbm.AtmProfile object.
+    :param atmosphere: sbm.AtmProfile object.
     :return:
     """
     from datetime import datetime
+
+    # Check dimension of grids for temp and vibtemps
+    if grid is None:
+        alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
+    else:
+        alts = grid[0]
+        n_alt = len(alts)
+
+    if n_alt != np.shape(atmosphere.grid)[1]:
+        try:
+            temp = atmosphere.interp_copy('temp',alts)
+        except Exception as cazzillo:
+            print(cazzillo)
+            print("Using name 'prof' instead")
+            temp = atmosphere.interp_copy('prof',alts)
+    else:
+        try:
+            temp = atmosphere.temp
+        except Exception as cazzillo:
+            print(cazzillo)
+            print("Using name 'prof' instead")
+            temp = atmosphere.prof
 
     try:
         n_mol = len(molecs)
@@ -894,8 +1126,6 @@ def write_tvib_gbb(filename, molecs, temp, l_ratio = True, n_alt = 151, alt_step
         n_mol = 1
         n_iso_tot = molecs.n_iso
         molecs = [molecs]
-
-    alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
 
     infile = open(filename, 'w')
     n_per_line = 8
@@ -945,13 +1175,29 @@ def write_tvib_gbb(filename, molecs, temp, l_ratio = True, n_alt = 151, alt_step
                 for simm in _lev_.simmetry:
                         infile.write('{:15s}\n'.format(simm))
 
+                # CHECKS if vibtemp profile has the right dimension:
+                if n_alt != np.shape(_lev_.vibtemp.grid)[1]:
+                    try:
+                        vibtemp = _lev_.vibtemp.interp_copy('vibtemp',alts)
+                    except Exception as cazzillo:
+                        print(cazzillo)
+                        print("Using name 'prof' instead")
+                        vibtemp = _lev_.vibtemp.interp_copy('prof',alts)
+                else:
+                    try:
+                        vibtemp = _lev_.vibtemp.temp
+                    except Exception as cazzillo:
+                        print(cazzillo)
+                        print("Using name 'prof' instead")
+                        vibtemp = _lev_.vibtemp.prof
+
+
                 infile.write('{:1s}\n'.format('#'))
                 if l_ratio:
-                    ratio = np.exp(-_lev_.energy/kbc*(1/_lev_.vibtemp-1/temp))
-                    prof = np.interp(alts, _lev_.vibtemp.grid[0,], ratio)
-                    #print(ratio,_lev_.vibtemp,temp, _lev_.vibtemp.grid[0,])
+                    prof = np.exp(-_lev_.energy/kbc*(1/vibtemp-1/temp))
                 else:
-                    prof = np.interp(alts, _lev_.vibtemp.grid[0,], _lev_.vibtemp)
+                    prof = vibtemp
+
                 for i in range(nlat):
                     writevec(infile,prof[::-1],n_per_line,strin)
                 infile.write('{:1s}\n'.format('#'))
@@ -1504,35 +1750,6 @@ def leggi_der_gbb(filename):
     ders = ders.astype(np.float)
     infile.close()
     return freq, ders
-
-
-def read_line_database(nome_sp, mol = None, iso = None, up_lev = None, down_lev = None, format = 'gbb'):
-    """
-    Reads line spectral data.
-    :param mol: HITRAN molecule number
-    :param iso: HITRAN iso number
-    :param up_lev: Upper level HITRAN string
-    :param down_lev: Lower level HITRAN string
-    :param format: If 'gbb' the format of MAKE_MW is used in reading, if 'HITRAN' the HITRAN2012 format.
-    returns:
-    list of line dicts. Planning to add line objects.
-    """
-    infi = open(nome_sp, 'r')
-    infi.readline()  # skip the first three lines
-    infi.readline()
-    infi.readline()
-    cose = ['mol', 'iso', 'freq', 'line_str', 'A', 'air_broad', 'self_broad', 'energy', 'T_dep_broad', 'P_shift',
-            'lev_up', 'lev_lo', 'q_num_up', 'q_num_lo']
-    cose2 = 2 * 'i4,' + 8 * 'f8,' + 3 * '|S15,' + '|S15'
-    linee = np.genfromtxt(infi, delimiter=(2, 1, 12, 10, 10, 6, 6, 10, 4, 8, 15, 15, 15, 15), dtype=cose2,
-                          names=cose)  # 110    FORMAT(i2,i1,f12.6,e10.3,e10.3,f6.4,f6.4,f10.4,f4.2,f8.6,4a15
-
-    for linea in linee:
-        if (linea['mol'] == mol or mol is None) and (linea['iso'] == iso or iso is None) and (linea['lev_up'] == up_lev or up_lev is None) and (linea['lev_lo'] == down_lev or down_lev is None):
-            linee_ok.append(linea)
-
-    infi.close()
-    return linee_ok
 
 
 def prova_cmap(cma=None):
