@@ -10,6 +10,8 @@ import matplotlib.ticker as ticker
 import matplotlib.lines as lin
 import math as m
 from numpy import linalg as LA
+
+print(sys.path, len(sys.path))
 from mpl_toolkits.basemap import Basemap
 from scipy.interpolate import griddata
 import pickle
@@ -192,7 +194,7 @@ def fmt(lon):
 
 def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',minu=0,maxu=0,title='',show=False,aur_model='stat',
                proj='orto',condpo=None, cbarform=None, cbarmult = None, cbarlabel = '', step = None, pdf=None,
-               edges=None,invert_cmap=False,cmap=None, axu=None, alpha=0.4, blats=None, style = None):
+               edges=None,invert_cmap=False,cmap=None, axu=None, alpha=0.4, blats=None, style = 'x-large'):
     """
     Plots points on a stereographic map with colors.
     :return:
@@ -210,10 +212,18 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',minu=0,maxu=0,title
     else:
         ax = pl.subplot(axu)
 
-    if style is None:
+# Valid font size are large, medium, smaller, small, x-large, xx-small, larger, x-small, xx-large, None
+    if style == 'medium':
         fnsz = 10
     elif style == 'small':
         fnsz = 7
+    elif style == 'large':
+        fnsz = 13
+    elif style == 'x-large':
+        fnsz = 16
+    else:
+        fnsz = 10
+        style = 'medium'
 
     pl.title(title, y=1.05,fontsize=style)
 
@@ -286,10 +296,10 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',minu=0,maxu=0,title
         cbarlabel = cbarlabel.format(cbarmult)
 
     if cbarform is not None:
-        cb = pl.colorbar(sca, format=cbarform, pad = 0.1)
+        cb = pl.colorbar(sca, format=cbarform, pad = 0.1, shrink = 0.8, aspect = 15)
         cb.set_label(cbarlabel,fontsize=style)
     else:
-        cb = pl.colorbar(sca, pad = 0.1)
+        cb = pl.colorbar(sca, pad = 0.1, shrink = 0.8, aspect = 15)
         cb.set_label(cbarlabel,fontsize=style)
 
     if step is not None:
@@ -304,6 +314,8 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',minu=0,maxu=0,title
         cb.set_ticks(ticks)
         cb.set_ticklabels(labels)
         cb.set_label(cbarlabel,fontsize=style)
+
+    cb.ax.tick_params(labelsize=fnsz)
 
     vip4x, vip4y = map(360-vip4_lon,vip4_lat)
 
@@ -400,9 +412,7 @@ def normalize_nonan(vec):
     return vec
 
 
-def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,title='',show=False,lonlat=False,xres=50,lonres=180,
-               latres=30,ncont=15,step=None,salta=2,cbarform=None, cbarlabel = '', cbarmult = None, addpoints=False,condpo=None,minnum=2,image=False,
-               interp='nearest',npoints=False, aur_model='stat',live=False, pdf=None, axu = None, blats=None, cmap='jet', style = None):
+def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto', minu=0, maxu=0, title='', show=False, lonlat=False, xres=50, lonres=180, latres=30, ncont=15, step=None, salta=2, cbarform=None, cbarlabel = '', cbarmult = None, addpoints=False, condpo=None, minnum=2, image=False, interp='nearest', npoints=False, aur_model='stat', live=False, pdf=None, axu = None, blats=None, cmap='jet', style = 'large', normalize = False, print_values = False):
     """
     Plots points on an ortho- or a stereographic map with colors.
     :return:
@@ -418,10 +428,16 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,titl
     else:
         ax = pl.subplot(axu)
 
-    if style is None:
+    # Valid font size are large, medium, smaller, small, x-large, xx-small, larger, x-small, xx-large, None
+    if style == 'medium':
         fnsz = 10
     elif style == 'small':
         fnsz = 7
+    elif style == 'large':
+        fnsz = 13
+    else:
+        fnsz = 10
+        style = 'medium'
 
     pl.title(title, y=1.05,fontsize=style)
 
@@ -542,6 +558,21 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,titl
     cols[(num < minnum)]=float(np.nan)
     #cols = np.ma.masked_array(cols, mask=cols<0.0)
 
+    if print_values:
+        filosname = nomefi[:nomefi.index('.')]+'.dat'
+        filos = open(filosname,'w')
+        filos.write('#{:7s}{:8s}{:12s}\n'.format('Lat','Lon','Value'))
+        for xxi,yyi,co in zip(xgri.flatten(),ygri.flatten(),cols.flatten()):
+            lo, la = map(xxi, yyi, inverse=True)
+            if abs(la) < np.min(abs(blats)): continue
+            try:
+                filos.write('{:8.2f}  {:8.2f}  {:12.3f}\n'.format(la,lo,co))
+            except Exception as cazzillo:
+                print(cazzillo)
+                print(type(la),type(lo),type(co))
+                print('PROBLEMA, converto masked a nan: {} {} {}'.format(la,lo,co))
+                filos.write('{:8.2f}  {:8.2f}  {:12.3f}\n'.format(la,lo,np.nan))
+        filos.close()
     #pl.pcolormesh(xg, yg, cols)
 
     #cols[20,40]=np.nan
@@ -578,6 +609,25 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,titl
             cols[(cols > maxu)] = maxu
             cols[(cols < minu)] = minu
             levels = np.linspace(minu,maxu,ncont+1)
+            if normalize:
+                levels = levels/np.max(levels)
+                cols = cols/np.max(levels)
+                cbarmult = None
+                if print_values:
+                    filosname = nomefi[:nomefi.index('.')]+'.dat'
+                    filos = open(filosname,'w')
+                    filos.write('#{:7s}{:8s}{:12s}\n'.format('Lat','Lon','Value'))
+                    for xxi,yyi,co in zip(xgri.flatten(),ygri.flatten(),cols.flatten()):
+                        lo, la = map(xxi, yyi, inverse=True)
+                        if abs(la) < np.min(abs(blats)): continue
+                        try:
+                            filos.write('{:8.2f}  {:8.2f}  {:12.3f}\n'.format(la,lo,co))
+                        except Exception as cazzillo:
+                            print(cazzillo)
+                            print(type(la),type(lo),type(co))
+                            print('PROBLEMA, converto masked a nan: {} {} {}'.format(la,lo,co))
+                            filos.write('{:8.2f}  {:8.2f}  {:12.3f}\n'.format(la,lo,np.nan))
+                    filos.close()
             if npoints:
                 lvls = np.logspace(0,3,10)
                 if not image: cont = pl.contourf(xgri, ygri, num,norm=LogNorm(),levels=lvls,corner_mask = True,cmap=cmap)
@@ -599,18 +649,21 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,titl
         except:
             levels = cont.levels
             ticks = levels[::salta]
+
         ticklab = [('{:'+cbarform[1:]+'}').format(ti/10**cbarmult) for ti in ticks]
-        cb = pl.colorbar(ax=ax, pad = 0.1)
+        cb = pl.colorbar(ax=ax, pad = 0.1, shrink = 0.8, aspect = 15)
         cb.set_ticks(ticks)
         cb.set_ticklabels(ticklab)
         cb.set_label(cbarlabel,fontsize=style)
     else:
         if cbarform is not None:
-            cb = pl.colorbar(ax=ax,format=cbarform, pad = 0.1)
+            cb = pl.colorbar(ax=ax,format=cbarform, pad = 0.1, shrink = 0.8, aspect = 15)
             cb.set_label(cbarlabel,fontsize=style)
         else:
-            cb = pl.colorbar(ax=ax,pad = 0.1)
+            cb = pl.colorbar(ax=ax,pad = 0.1, shrink = 0.8, aspect = 15)
             cb.set_label(cbarlabel,fontsize=style)
+
+    cb.ax.tick_params(labelsize=fnsz)
 
     if addpoints:
         if(condpo is None):
@@ -641,7 +694,7 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto',minu=0,maxu=0,titl
         pl.plot(vip4x,vip4y,color='black',linewidth=aur_lw,linestyle='--')
     elif aur_model == 'stat':
         pl.plot(stat_x,stat_y,color='white',linewidth=aur_lw)
-        pl.plot(stat_x,stat_y,color='black',linewidth=aur_lw,linestyle='-')
+        pl.plot(stat_x,stat_y,color='black',linewidth=aur_lw,linestyle='--')
     else:
         pl.plot(vip4x,vip4y,color='white',linewidth=aur_lw)
         pl.plot(vip4x,vip4y,color='black',linewidth=aur_lw,linestyle='--')
@@ -823,9 +876,9 @@ def leggi_map_aur(polo):
     :return:
     """
     if polo == 'S':
-        filename = '/home/fede/Scrivania/Jiram/DATA/Model_VIP4/southR30table.txt'
+        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/southR30table.txt'
     if polo == 'N':
-        filename = '/home/fede/Scrivania/Jiram/DATA/Model_VIP4/northR30table.txt'
+        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/northR30table.txt'
 
     infile = open(filename, 'r')
     infile.readline()
@@ -839,9 +892,9 @@ def leggi_map_aur(polo):
     infile.close()
 
     if polo == 'S':
-        filename = '/home/fede/Scrivania/Jiram/DATA/Model_VIP4/statistico/south_aurora.txt'
+        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/statistico/south_aurora.txt'
     if polo == 'N':
-        filename = '/home/fede/Scrivania/Jiram/DATA/Model_VIP4/statistico/north_aurora.txt'
+        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/statistico/north_aurora.txt'
 
     infile = open(filename, 'r')
     infile.readline()
@@ -1073,9 +1126,9 @@ def read_res_jir_4(filename):
 def leggi_console(polo,cartres=None,filtra=True):
 
     if polo == 'S':
-        input_file = '/home/fede/Scrivania/Dotto/Git/JiramPy/input_mappe_S.in'
+        input_file = '/home/fedefab/Scrivania/Research/Dotto/Git/JiramPy/input_mappe_S.in'
     elif polo == 'N':
-        input_file = '/home/fede/Scrivania/Dotto/Git/JiramPy/input_mappe_N.in'
+        input_file = '/home/fedefab/Scrivania/Research/Dotto/Git/JiramPy/input_mappe_N.in'
     else:
         print('puppa')
         sys.exit()

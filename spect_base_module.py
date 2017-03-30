@@ -11,6 +11,7 @@ import math as mt
 from numpy import linalg as LA
 import scipy.constants as const
 import warnings
+import copy
 
 
 #parameters
@@ -27,6 +28,230 @@ kbc = const.k/(const.h*100*const.c) # 0.69503
 ###############################             FUNZIONI                 ################################################
 #####################################################################################################################
 #####################################################################################################################
+class Coords(object):
+    """
+    Coordinates. Some useful trick.
+    """
+    def __init__(self, coords, s_ref = 'Cartesian', R = Rtit):
+        """
+        Coordinate order is as follows:
+        #Cartesian# : (x,y,z)
+        #Spherical# : (lat,lon,R)
+        #Pure_spherical# : (R, theta, phi)
+        """
+        self.coords = np.array(coords, dtype = float)
+        self.s_ref = s_ref
+        if s_ref == 'Cartesian':
+            self.x = coords[0]
+            self.y = coords[1]
+            self.z = coords[2]
+        elif s_ref == 'Spherical':
+            self.lat = coords[0]
+            self.lon = coords[1]
+            self.height = coords[2]
+            self.R = R
+        elif s_ref == 'Pure_spherical':
+            self.R = coords[0]
+            self.theta = coords[1]
+            self.phi = coords[2]
+        else:
+            raise ValueError('Reference system of type {}'.format(s_ref))
+
+        return
+
+    def Spherical(self):
+        if self.s_ref == 'Cartesian':
+            return carttosph(self.coords)
+        elif self.s_ref == 'Spherical':
+            return self.coords
+
+    def Cartesian(self):
+        if self.s_ref == 'Cartesian':
+            return self.coords
+        elif self.s_ref == 'Spherical':
+            return sphtocart(self.lat, self.lon, h=self.height, R=self.R)
+
+
+class LineOfSight(object):
+    """
+    Class to represent the geometry of an observation.
+    """
+
+    def __init__(self, spacecraft_coords, second_point):
+        self.starting_point = copy.copy(spacecraft_coords)
+        self.second_point = copy.copy(second_point)
+
+        return
+
+    def calc_LOS_vector(self):#, planet, ellipsoidal = False):
+        """
+        Adds to the LOS object a parameter vector that points from the Spacecraft to the observed point on the planet.
+        """
+
+        c1 = self.starting_point.Cartesian()
+        c2 = self.second_point.Cartesian()
+
+        _LOS = (c2-c1)/LA.norm(c2-c1) # Unit LOS vector
+        self._LOS = _LOS
+
+        return _LOS
+
+
+    def find_TOA_ingress(self, planet, ellipsoidal = False, thres = 0.1):
+        """
+        Finds the point of intersection of TOA and LoS (the one closer to spacecraft).
+        """
+        TOA_R = planet.atm_extension + planet.radius
+
+        _LOS = self.calc_LOS_vector()
+        c1 = self.starting_point.Cartesian()
+        point = c1
+
+        step = (LA.norm(c1)-TOA_R)/10.0
+        found = False
+        inside = False
+
+        i = 0
+        while not found:
+            i+=1
+            print(_LOS,step,point)
+            point += _LOS * step
+            inside = (LA.norm(point) < TOA_R)
+            if inside and step <= thres:
+                print('controllo finale')
+                found = True
+            elif inside and step > thres:
+                print('controllo, divido step {}'.format(step))
+                point -= _LOS * step
+                step *= 0.1
+            if i == 100:
+                break
+
+        return point
+
+
+    def calc_atm_intersections(self, planet, delta_x = 5.0, start_from_TOA = True, extinction_coeff = None, refraction = False, adaptive_step = False):
+        """
+        Calculates the coordinates of the points that the LOS crosses in the atmosphere. If extinction_coeff is set, the coordinate along the LOS is tau, the optical depth, instead it is just the distance in km. If start_from_TOA is True, the LOS path starts at the first intersection with the atmosphere.
+
+        NO REFRACTION INCLUDED!! work in progress.....
+        """
+
+        _LOS = self.calc_LOS_vector()
+        TOA_R = planet.atm_extension + planet.radius
+        R = planet.radius
+
+        if start_from_TOA:
+            point_0 = self.intersect_shell(planet, self.starting_point.Cartesian(), TOA_R)
+        else:
+            point_0 = self.starting_point.Cartesian()
+
+        los_points = []
+        los_points.append(Coords(point_0, R = planet.radius))
+
+        inside = True
+        point = point_0
+        while inside:
+            if adaptive_step:
+                #Something that calculates the best step at point
+                pass
+            point = self.move_along_LOS(planet, point, delta_x, refraction = refraction)
+            inside = (LA.norm(point) < TOA_R)
+            surface_hit = (LA.norm(point) < R)
+            if surface_hit:
+                point = self.move_along_LOS(planet, point, delta_x, refraction = refraction, backward = True)
+                point = self.intersect_shell(planet, point, R)
+                los_points.append(Coords(point, R = planet.radius))
+                print('Hit the surface.. Stopping ray path.')
+                break
+            elif inside:
+                los_points.append(Coords(point, R = planet.radius))
+
+        los_points = los_points[::-1]
+
+        self.intersections = los_points
+
+        return los_points
+
+
+    def intersect_shell(self, planet, point, shell_radius, thres = 0.1, refraction = False):
+        """
+        Starting from point, finds the closer intersection with shell at radius shell_radius.
+        DA AGGIUNGERE! : controllo di esistenza dell'intersezione
+        """
+        _LOS = self.calc_LOS_vector()
+        deltino = LA.norm(point)-shell_radius
+
+        while deltino > thres:
+            deltino = LA.norm(point)-shell_radius
+            deltino = deltino/LA.linalg.dot(-normalize(point), _LOS)
+            point = self.move_along_LOS(planet, point, deltino, refraction = refraction)
+
+        return point
+
+
+    def move_along_LOS(self, planet, point, step, refraction = False, backward = False):
+        """
+        Simply makes a step in the los. PLANNED INCLUSION OF REFRACTION.
+        """
+        _LOS = self.calc_LOS_vector()
+        point += _LOS * step
+
+        return point
+
+
+def normalize(vector):
+    norm_vector = vector/LA.norm(vector)
+    return norm_vector
+
+
+class Planet(object):
+    """
+    Class to represent a planet.
+    """
+
+    def __init__(self, name, color = None, planet_radius = None, planet_radii = None, planet_mass = None, planet_type = None, atm_extension = None, planet_star_distance = None, rotation_axis_inclination = None, rotation_axis = None, rotation_period = None, revolution_period = None, obs_time = None, is_satellite = False, orbiting_planet = None, satellite_planet_distance = None, satellite_orbital_period = None):
+        self.name = name
+        self.color = color # representative color (just for drawing purposes)
+        self.radius = planet_radius # MEAN radius
+        self.radii = planet_radii # LIST with EQUATORIAL and POLAR radius
+        self.mass = planet_mass
+        self.type = planet_type # Terrestrial, Gas Giant, ...
+        self.atm_extension = atm_extension # mainly for drawing purposes
+        self.planet_star_distance = planet_star_distance
+        self.rotation_axis = rotation_axis # THis is a vector. the reference frame is: z -> perpendicular to the orbit plane; x -> points from star to planet;
+        self.rotation_axis_inclination = rotation_axis_inclination
+        self.rotation_period = rotation_period
+        self.revolution_period = revolution_period
+        self.obs_time = obs_time # If I create a planet at some specific season
+
+        self.is_satellite = is_satellite
+        self.is_satellite_of = orbiting_planet
+        self.satellite_planet_distance = satellite_planet_distance
+        self.satellite_orbital_period = satellite_orbital_period
+
+        return
+
+
+    def add_atmosphere(self, atmosphere):
+        """
+        Creates a link to an AtmProfile object containing temp, pres, ...
+        """
+
+        if type(atmosphere) is not AtmProfile:
+            raise ValueError('atmosphere is not an AtmProfile object. Create it via Prof_ok = AtmProfile(atmosphere, grid).')
+
+        self.atmosphere = atmosphere
+
+        return
+
+
+class Titan(Planet):
+    def __init__(self):
+        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1000., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
+
+        return
+
 
 class Pixel(object):
     """
@@ -189,23 +414,23 @@ class IsoMolec(object):
         self.levels = []
         return
 
-    def add_levels(self, levels, energies, vibtemps = None, degeneracies = None, simmetries = None):
+    def add_levels(self, lev_strings, energies, vibtemps = None, degeneracies = None, simmetries = None):
         """
         Adds vibrational levels to selected isotopologue.
         """
 
         if degeneracies is None:
-            degeneracies = len(levels)*[-1]
+            degeneracies = len(lev_strings)*[-1]
         if simmetries is None:
-            simmetries = len(levels)*[[]]
+            simmetries = len(lev_strings)*[[]]
         if vibtemps is None:
-            vibtemps = len(levels)*[None]
+            vibtemps = len(lev_strings)*[None]
 
-        for levstr,ene,deg,sim,i,vib in zip(levels,energies,degeneracies,simmetries,range(len(levels)),vibtemps):
+        for levstr,ene,deg,sim,i,vib in zip(lev_strings,energies,degeneracies,simmetries,range(len(lev_strings)),vibtemps):
             print('Level <{}>, energy {} cm-1'.format(levstr,ene))
             string = 'lev_{:02d}'.format(i)
             self.levels.append(string)
-            lev = Level(levstr, ene, degen = deg, simmetry = sim)
+            lev = Level(levstr, ene, degeneracy = deg, simmetry = sim)
             if vib is not None:
                 lev.add_vibtemp(vib)
             setattr(self,string,lev)
@@ -213,18 +438,42 @@ class IsoMolec(object):
 
         return
 
-    def add_level(self, levstr, ene, deg = -1, sim = ['']):
+    def add_level(self, lev_string, energy, degeneracy = -1, simmetry = [''], vibtemp = None):
         """
         Adds a single vib. level.
         """
-        print('Level <{}>, energy {} cm-1'.format(levstr,ene))
+        print('Level <{}>, energy {} cm-1'.format(lev_string,energy))
         string = 'lev_{:02d}'.format(self.n_lev)
-        lev = Level(levstr, ene, degen = deg, simmetry = sim)
+        lev = Level(lev_string, energy, degeneracy = degeneracy, simmetry = simmetry)
+        if vibtemp is not None:
+            lev.add_vibtemp(vibtemp)
         setattr(self,string,lev)
+        self.levels.append(string)
         self.n_lev += 1
 
-        return
+    def find_level_from_quanta(self, quanta, simmetry = None):
+        """
+        Given the set of quantum numbers (list) returns the level object. Optionally also simmetry can be set.
+        """
 
+        found = False
+        for lev in self.levels:
+            level = getattr(self, lev)
+            qlev = level.get_quanta(self.mol)
+            if simmetry is None:
+                if qlev[0] == quanta:
+                    found = True
+            else:
+                if qlev[0] == quanta and qlev[1] == simmetry:
+                    found = True
+
+            if found: break
+
+        if found:
+            return level
+        else:
+            print('Level {} with simmetry {} not found.'.format(quanta,simmetry))
+            return None
 
 
 class Level(object):
@@ -233,10 +482,10 @@ class Level(object):
     Planned: decomposition of HITRAN strings in vib quanta.
     """
 
-    def __init__(self, levstring, energy, degen = -1, simmetry = []):
-        self.level = levstring
+    def __init__(self, levstring, energy, degeneracy = -1, simmetry = []):
+        self.lev_string = levstring
         self.energy = energy
-        self.degen = degen
+        self.degeneracy = degeneracy
         self.simmetry = simmetry
         self.vibtemp = None
         return
@@ -248,9 +497,20 @@ class Level(object):
         if type(profile) is not AtmProfile:
             raise ValueError('Profile is not an AtmProfile object. Create it via Prof_ok = AtmProfile(profile, grid).')
         setattr(self, 'vibtemp', profile)
-        print('Added vibrational temperature to level <{}>'.format(self.level))
+        print('Added vibrational temperature to level <{}>'.format(self.lev_string))
 
         return
+
+    def get_quanta(self, mol):
+        """
+        Reads from the lev_string the quantum numbers and returns a list plus a simmetry. Need to specify the molecule for now. Output format: ([n1, n2, n3, ..], simmetry)
+        """
+        if mol == 6:
+            quanta = extract_quanta_ch4(self.lev_string)
+        else:
+            raise ValueError('No routine available for molecule {}'.format(mol))
+
+        return quanta
 
 
 class CosaScema(np.ndarray):
@@ -465,6 +725,13 @@ class AtmProfile(object):
         """
         pass
 
+    def calc_along_LOS(self, LOS, nomeprof = 'prof', step = None, tau_step = 1e-5, max_line_strength = None, delta_var_prof = 0.01):
+        """
+        Returns a vector with prof values on the LOS and a vector of positions of the selected points.
+        """
+        pass
+
+
 
 #### FINE AtmProfile class
 
@@ -670,6 +937,26 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     # Out[238]: array([ 110.,  120.,  110.,  120.])
 
 
+def vibtemp_to_ratio(energy,vibtemp,temp):
+    """
+    Converts vibrational temperature profile to non-lte ratio. Simple array profiles as input.
+    """
+
+    prof = np.exp(-energy/kbc*(1/vibtemp-1/temp))
+
+    return prof
+
+
+def ratio_to_vibtemp(energy,ratio,temp):
+    """
+    Converts non-lte ratio to vibrational temperature profile. Simple array profiles as input.
+    """
+
+    prof = energy/kbc*(energy/(kbc*temp)-np.log(ratio))**(-1)
+
+    return prof
+
+
 def int1d(vals,weights,itype):
     """
     Given the two values with relative weights, gives the interpolated value according to itype.
@@ -806,6 +1093,7 @@ def cbar_things(levels):
     else:
         lab = r'$\times 10^{{{}}}$ '.format(expo)
 
+    print(log1,log2,expo,np.max(levels),np.min(levels))
     return expo, lab
 
 
@@ -830,7 +1118,7 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
 
     fig = pl.figure(figsize=(8, 6), dpi=150)
 
-    pl.grid()
+    #pl.grid()
     pl.xlabel(xlabel)
     pl.ylabel(ylabel)
     if ylim is not None:
@@ -845,21 +1133,31 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
         clevels = np.linspace(levels[0],levels[-1],100)
         pre = np.linspace(np.min(quant.compressed()), levels[0], 10)
         post = np.linspace(levels[-1], np.max(quant.compressed()), 10)
-        clevels = np.append(pre, clevels)
-        clevels = np.append(clevels, post)
+        clevels = np.append(pre[:-1], clevels)
+        clevels = np.append(clevels, post[1:])
     else:
         clevels = levels
 
     print('levels: ',levels)
     print('clevels: ',clevels)
+    # fig2 = pl.figure(figsize=(8, 6), dpi=150)
+    # pl.plot(np.arange(len(clevels)),clevels)
+    # pl.scatter(np.arange(len(clevels)),clevels)
+    # pl.show()
+
     expo, clab = cbar_things(levels)
     quant = quant/10**expo
     levels = levels/10**expo
+    clevels = clevels/10**expo
+    print(levels)
 
     zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both')
     if lines:
         zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
 
+    # This is the fix for the white lines between contour levels
+    for coz in zuf.collections:
+        coz.set_edgecolor("face")
     cb = pl.colorbar(mappable = zuf, format=cbarform, pad = 0.1)
     cb.set_label(cbarlabel.format(clab))
 
@@ -895,6 +1193,9 @@ def trova_spip(file, hasha = '#', read_past = False):
         else:
             return
 
+def find_spip(*args, **kwargs):
+    out = trova_spip(*args, **kwargs)
+    return out
 
 def read_obs(filename):
     """
@@ -1088,6 +1389,155 @@ def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0, nla
     return
 
 
+def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4):
+    """
+    Reads in_vibtemp.dat file. Output is a list of sbm.Molec objects. Atmosphere is a sbm.AtmProfile object with at
+    """
+    if grid is None:
+        alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
+    else:
+        alts = grid[0]
+        n_alt = len(alts)
+
+    temp = atmosphere.interp_copy('temp',alts)
+    infile = open(filename, 'r')
+
+    trova_spip(infile)
+    n_mol = int(infile.readline().rstrip())
+
+    molecs = []
+    mol = 0
+    molec = Molec(mol, 'mol_0', MM=None)
+
+    for ii in range(n_mol):
+        trova_spip(infile)
+        mol, iso, n_lev = map(int, infile.readline().rstrip().split())
+        print(mol,iso,n_lev)
+        if mol != molec.mol: # Se è una molecola nuova ricreo il molec
+            if molec.mol != 0: molecs.append(molec)
+            molec = Molec(mol, 'mol_{:2d}'.format(mol), MM=None)
+            molec.link_to_atmos(atmosphere)
+        molec.add_iso(iso)
+
+        for ll in range(n_lev):
+            trova_spip(infile)
+            linea = infile.readline().rstrip()
+            lev_str = linea[0:15]
+            print(linea.split())
+            n_lev_int, n_simm = map(int,linea[15:].split()[:2])
+            try:
+                fac, energy = map(float,linea[15:].split()[2:])
+            except:
+                fac = float(linea[15:].split()[2])
+                energy = find_ch4_energy(lev_str)
+            simms = []
+            for sss in range(n_simm):
+                simms.append(infile.readline().rstrip()[0:15])
+
+            trova_spip(infile)
+            prof = []
+            while len(prof) < n_alt:
+                line = infile.readline()
+                prof += list(map(float, line.split()))
+            prof = np.array(prof[::-1])
+            prof = ratio_to_vibtemp(energy, prof, temp)
+            prof = AtmProfile(prof, alts, profname = 'vibtemp')
+
+            # levello = Level(lev_str, energy, degen = -1, simmetry = simms)
+            # levello.add_vibtemp(prof)
+            isomol = getattr(molec, 'iso_{:1d}'.format(iso))
+            isomol.add_level(lev_str, energy, degeneracy = -1, simmetry = simms, vibtemp = prof)
+            trova_spip(infile)
+
+    molecs.append(molec)
+
+    return molecs
+
+
+def find_ch4_energy(lev_string):
+    energies_ch4 = [0.0, 1310.7606, 1533.332, 2608.69, 2838.26, 2916.483, 3019.497, 3064.48, 4223.46, 4321.67, 4540.65, 6024.28, 3870.5, 5588.0, 4123.0, 5161.0958, 5775.0, 5861.0]
+#    levels = [['     0 0 0 0   ','    0 0 0 0 1A1'], ['     0 0 0 1   ', '    0 0 0 1 1F2'], ['     0 1 0 0   '], ['     0 0 0 2   ', '    0 0 0 2 1F2', '    0 0 0 2 1E', '    0 0 0 2 1A1'], ['     0 1 0 1   ', '    0 1 0 1 1F2', '    0 1 0 1 1F1'], ['     1 0 0 0   ', '    1 0 0 0 1A1'], ['     0 0 1 0   ', '    0 0 1 0 1F2'], ['     0 2 0 0   ', '    0 2 0 0 1E', '    0 2 0 0 1A1', '    0 2 0 0 1 E'], ['     1 0 0 1   ', '    1 0 0 1 1F2'], ['     0 0 1 1   ', '    0 0 1 1 1F1', '    0 0 1 1 1F2', '    0 0 1 1 1E', '    0 0 1 1 1A1'], ['     0 1 1 0   ', '    0 1 1 0 1F1', '    0 1 1 0 1F2'], ['     0 0 2 0   ', '    0 0 2 0 1F2', '    0 0 2 0 1E', '    0 0 2 0 1A1'], ['     0 0 0 3   ', '    0 0 0 3 1F1', '    0 0 0 3 2F2'], ['     0 0 1 2   ', '    0 0 1 2 1F1', '    0 0 1 2 1F2', '    0 0 1 2 1E', '    0 0 1 2 1A1'], ['     0 1 0 2   ', '    0 1 0 2 1F2', '    0 1 0 2 1F1', '    0 1 0 2 1E', '    0 1 0 2 1A2', '    0 1 0 2 2 E', '    0 1 0 2 1A1'], ['     0 0 0 4   '], ['     1 1 0 1   '], ['     0 1 1 1   ', '    0 1 1 1 1F1', '    0 1 1 1 1F2', '    0 1 1 1 1E', '    0 1 1 1 1A1', '    0 1 1 1 1A2']]
+
+    lev_quanta = [[0, 0, 0, 0], [0, 0, 0, 1], [0, 1, 0, 0], [0, 0, 0, 2], [0, 1, 0, 1], [1, 0, 0, 0], [0, 0, 1, 0], [0, 2, 0, 0], [1, 0, 0, 1], [0, 0, 1, 1], [0, 1, 1, 0], [0, 0, 2, 0], [0, 0, 0, 3], [0, 0, 1, 2], [0, 1, 0, 2], [0, 0, 0, 4], [1, 1, 0, 1], [0, 1, 1, 1]]
+
+
+    for lista_cosi, energy in zip(lev_quanta,energies_ch4):
+        quant = extract_quanta_ch4(lev_string)[0]
+        print(quant,lista_cosi)
+
+        if quant == lista_cosi:
+            return energy
+
+    raise ValueError('Level {} not found!'.format(lev_string))
+
+def extract_quanta_ch4(lev_string):
+    v1, v2, v3, v4 = map(int,lev_string.split()[:4])
+    try:
+        simm = lev_string.split()[4].strip()
+    except:
+        simm = ''
+
+    return [v1,v2,v3,v4], simm
+
+def hitran_formatter(quanta,simmetry = '', molec = 'CH4'):
+
+    lista = [q for q in quanta] + [simmetry]
+
+    if molec == 'CH4':
+        string = 4*' '+4*'{:1d} '+'{:3s}'
+        string = string.format(*lista)
+
+    return string
+
+def read_mol_levels_HITRAN(filename = None, molec = None):
+    """
+    Reads molecular levels strings from an external file. Format is a bit weird..
+    """
+
+    if filename is None and molec is None:
+        raise ValueError('Please insert the filename or the molecule to be loaded.\n')
+    elif filename is None:
+        if molec == 'CH4':
+            filename = '/home/fedefab/Scrivania/Research/Dotto/AbstrArt/CH4_HCN_climatology/T_vibs/CH4_levels_bianca.dat'
+
+    fil = open(filename,'r')
+
+    n_simms = []
+    lev_strings = []
+    quanta = []
+
+    find_spip(fil)
+    lines = fil.readlines()
+    ilin = 0
+    while ilin < len(lines):
+        line = lines[ilin]
+        ilin += 1
+        print(line,len(line))
+        nome = line[:9]
+        #print(line[9:18])
+        gigi = extract_quanta_ch4(line[9:18])[0]
+        #print(gigi)
+        quanta.append(gigi)
+        n_simm = int(line[19:25])
+        n_simms.append(n_simm)
+        lev_stringa_lui = []
+        quantsim = extract_quanta_ch4(line[25:39].rstrip())
+        lev_stringa_lui.append(hitran_formatter(quantsim[0],quantsim[1],molec='CH4'))
+        for isim in range(n_simm-1):
+            line = lines[ilin]
+            print(line,len(line))
+            quantsim = extract_quanta_ch4(line[25:39].rstrip())
+            lev_stringa_lui.append(hitran_formatter(quantsim[0],quantsim[1],molec='CH4'))
+            ilin += 1
+
+        lev_strings.append(lev_stringa_lui)
+
+    key_strings = ['quanta', 'n_simms', 'lev_strings']
+    variables = [quanta,n_simms,lev_strings]
+
+    return dict(zip(key_strings,variables))
+
+
 def write_tvib_gbb(filename, molecs, atmosphere, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4, descr = '', script=__file__):
     """
     Writes input in_vibtemp.dat in gbb standard format: nlte ratio.
@@ -1167,13 +1617,14 @@ def write_tvib_gbb(filename, molecs, atmosphere, grid = None, l_ratio = True, n_
                 print(type(_lev_))
                 infile.write('Hitran Code of level, internal code of level, number of simmetries, multiplier(depr.), Level Energy:\n')
                 infile.write('{:1s}\n'.format('#'))
-                infile.write('{:15.15s}{:5d}{:5d}{:20.3f}{:12.4f}\n'.format(_lev_.level,ioo,len(_lev_.simmetry),1.0,_lev_.energy))
-                if len(_lev_.level) != 15:
-                    errstring = 'Length of level string is {} instead of 15 for level {} of molecule {}.'.format(len(_lev_.level),lev,iso)
+                print(_lev_.simmetry)
+                infile.write('{:15.15s}{:5d}{:5d}{:20.3f}{:12.4f}\n'.format(_lev_.simmetry[0],ioo,len(_lev_.simmetry)-1,1.0,_lev_.energy))
+                if len(_lev_.lev_string) != 15:
+                    errstring = 'Length of level string is {} instead of 15 for level {} of molecule {}.'.format(len(_lev_.lev_string),lev,iso)
                     raise ValueError(errstring)
 
-                for simm in _lev_.simmetry:
-                        infile.write('{:15s}\n'.format(simm))
+                for simm in _lev_.simmetry[1:]:
+                    infile.write('{:15s}\n'.format(simm))
 
                 # CHECKS if vibtemp profile has the right dimension:
                 if n_alt != np.shape(_lev_.vibtemp.grid)[1]:
@@ -1194,7 +1645,9 @@ def write_tvib_gbb(filename, molecs, atmosphere, grid = None, l_ratio = True, n_
 
                 infile.write('{:1s}\n'.format('#'))
                 if l_ratio:
-                    prof = np.exp(-_lev_.energy/kbc*(1/vibtemp-1/temp))
+                    print('Energiaaa ',_lev_.energy)
+                    prof = vibtemp_to_ratio(_lev_.energy, vibtemp, temp)
+                    #prof = np.exp(-_lev_.energy/kbc*(1/vibtemp-1/temp))
                 else:
                     prof = vibtemp
 
@@ -1868,17 +2321,48 @@ def deg(ang):
     return ang*180.0/np.pi
 
 
-def sphtocart(lat, lon, h=0., R=Rtit):
+def sphtocart(r, R=Rtit, input_in_deg = True):
     """
     Converts from (lat, lon, alt) to (x, y, z).
     Convention: lon goes from 0 to 360, starting from x axis, towards East. lat is the latitude.
     h is the altitude with respect to the spherical surface. R_p is the planet radius.
     :return: 3D numpy array
     """
-    r = [mt.cos(lat)*mt.cos(lon), mt.cos(lat)*mt.sin(lon), mt.sin(lat)]
+    lat = r[0]
+    lon = r[1]
+    h = r[2]
+
+    if input_in_deg:
+        latu = rad(lat)
+        lonu = rad(lon)
+
+    r = [mt.cos(latu)*mt.cos(lonu), mt.cos(latu)*mt.sin(lonu), mt.sin(latu)]
     r = np.array(r)
     r *= (R + h)
+
     return r
+
+
+def carttosph(r, R = Rtit, output_in_deg = True):
+    """
+    Converts to (lat, lon, alt) from (x, y, z).
+    Convention: lon goes from 0 to 360, starting from x axis, towards East. lat is the latitude.
+    h is the altitude with respect to the spherical surface. R_p is the planet radius.
+    :return: 3D numpy array
+    """
+    dist = LA.norm(r)
+    h = dist - R
+    lat = mt.asin(r[2]/dist)
+    #lon = mt.atan(r[1]/r[0])
+    lon = mt.acos(r[0]/(dist*mt.cos(lat)))
+    if r[1] < 0:
+        lon = 2*np.pi-lon
+
+    if output_in_deg:
+        lat = deg(lat)
+        lon = deg(lon)
+
+    return np.array([lat,lon,h])
 
 
 def LOS_2D(alt_tg,alts,T,P,gas_ok,ext_coef,Rpl=2575.0):
