@@ -12,6 +12,7 @@ from numpy import linalg as LA
 import scipy.constants as const
 import warnings
 import copy
+import pickle
 
 
 #parameters
@@ -69,7 +70,7 @@ class Coords(object):
         if self.s_ref == 'Cartesian':
             return self.coords
         elif self.s_ref == 'Spherical':
-            return sphtocart(self.lat, self.lon, h=self.height, R=self.R)
+            return sphtocart(self.coords, R=self.R)
 
 
 class LineOfSight(object):
@@ -78,8 +79,12 @@ class LineOfSight(object):
     """
 
     def __init__(self, spacecraft_coords, second_point):
-        self.starting_point = copy.copy(spacecraft_coords)
-        self.second_point = copy.copy(second_point)
+        self.starting_point = copy.deepcopy(spacecraft_coords)
+        self.second_point = copy.deepcopy(second_point)
+        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
+        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
+        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
+        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
 
         return
 
@@ -88,46 +93,71 @@ class LineOfSight(object):
         Adds to the LOS object a parameter vector that points from the Spacecraft to the observed point on the planet.
         """
 
-        c1 = self.starting_point.Cartesian()
-        c2 = self.second_point.Cartesian()
+        c1 = copy.deepcopy(self.starting_point.Cartesian())
+        c2 = copy.deepcopy(self.second_point.Cartesian())
 
         _LOS = (c2-c1)/LA.norm(c2-c1) # Unit LOS vector
+        print(c2-c1,LA.norm(c2-c1))
+        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
         self._LOS = _LOS
 
         return _LOS
 
 
-    def find_TOA_ingress(self, planet, ellipsoidal = False, thres = 0.1):
+    def details(self):
+        print('Observer point: {}, {}'.format(self.starting_point.Cartesian(), self.starting_point.Spherical()))
+        print('Second point: {}, {}'.format(self.second_point.Cartesian(), self.second_point.Spherical()))
+        try:
+            print('LOS vector: {}'.format(self._LOS))
+        except:
+            print('LOS vector: {}'.format(self.calc_LOS_vector()))
+
+        return
+
+    def calc_along_LOS(self, atmosphere, profname, curgod = False, set_attr = False, set_attr_name = None):
         """
-        Finds the point of intersection of TOA and LoS (the one closer to spacecraft).
+        Returns a vector with prof values on the LOS.
+        ###################### WIPPPPPP
+        CURGOD TO BE INTRODUCED
+        method available: simple, curgod
         """
-        TOA_R = planet.atm_extension + planet.radius
 
-        _LOS = self.calc_LOS_vector()
-        c1 = self.starting_point.Cartesian()
-        point = c1
+        try:
+            points = self.intersections
+        except:
+            points = self.calc_atm_intersections(planet)
 
-        step = (LA.norm(c1)-TOA_R)/10.0
-        found = False
-        inside = False
+        self.atm_quantities = dict([])
 
-        i = 0
-        while not found:
-            i+=1
-            print(_LOS,step,point)
-            point += _LOS * step
-            inside = (LA.norm(point) < TOA_R)
-            if inside and step <= thres:
-                print('controllo finale')
-                found = True
-            elif inside and step > thres:
-                print('controllo, divido step {}'.format(step))
-                point -= _LOS * step
-                step *= 0.1
-            if i == 100:
-                break
+        quant = []
 
-        return point
+        for point1,point2 in zip(points[:-1],points[1:]):
+            point = Coords((point1.Cartesian()+point2.Cartesian())/2)
+            quant.append(atmosphere.calc(point.Spherical()[2],profname))
+            if curgod:
+                print('Not yet available! Doing simple interpolation..')
+
+        if set_attr:
+            if set_attr_name is None:
+                set_attr_name = profname
+            self.atm_quantities[set_attr_name] = np.array(quant)
+
+        return np.array(quant)
+
+
+    def calc_SZA_along_los(self,planet,sub_solar_point):
+        try:
+            points = self.intersections
+        except:
+            points = self.calc_atm_intersections(planet)
+
+        szas = []
+        for point in points:
+            szas.append(angle_between(point.Cartesian(), sub_solar_point.Cartesian()))
+
+        self.szas = np.array(szas)
+
+        return np.array(szas)
 
 
     def calc_atm_intersections(self, planet, delta_x = 5.0, start_from_TOA = True, extinction_coeff = None, refraction = False, adaptive_step = False):
@@ -137,14 +167,42 @@ class LineOfSight(object):
         NO REFRACTION INCLUDED!! work in progress.....
         """
 
-        _LOS = self.calc_LOS_vector()
+        try:
+            _LOS = self._LOS
+        except Exception as cazzillo:
+            _LOS = self.calc_LOS_vector()
+            print(cazzillo)
+
         TOA_R = planet.atm_extension + planet.radius
         R = planet.radius
 
         if start_from_TOA:
-            point_0 = self.intersect_shell(planet, self.starting_point.Cartesian(), TOA_R)
+            print('Qui')
+            print(self.starting_point.Cartesian())
+            point_0, i_type = self.intersect_shell(planet, self.starting_point.Cartesian(), TOA_R)
+            if i_type != 'Ingress':
+                raise ValueError('No intersection with shell!')
+            print('Quo')
         else:
-            point_0 = self.starting_point.Cartesian()
+            point_0 = copy.deepcopy(self.starting_point.Cartesian())
+
+
+        min_R = self.get_closest_distance()
+        if min_R <= R:
+            self.nadir_flag = True
+            self.limb_flag = False
+            self.deepsky_flag = False
+            self.tangent_altitude = self.min_distance-R
+        elif min_R > R and min_R <= TOA_R:
+            self.nadir_flag = False
+            self.limb_flag = True
+            self.tangent_altitude = self.min_distance-R
+            self.deepsky_flag = False
+        else:
+            self.nadir_flag = False
+            self.limb_flag = False
+            self.deepsky_flag = True
+            self.tangent_altitude = self.min_distance-R
 
         los_points = []
         los_points.append(Coords(point_0, R = planet.radius))
@@ -157,14 +215,18 @@ class LineOfSight(object):
                 pass
             point = self.move_along_LOS(planet, point, delta_x, refraction = refraction)
             inside = (LA.norm(point) < TOA_R)
+            print(inside, point)
             surface_hit = (LA.norm(point) < R)
             if surface_hit:
                 point = self.move_along_LOS(planet, point, delta_x, refraction = refraction, backward = True)
-                point = self.intersect_shell(planet, point, R)
+                point, i_type = self.intersect_shell(planet, point, R)
+                if i_type != 'Ingress':
+                    raise ValueError('No intersection with shell!')
                 los_points.append(Coords(point, R = planet.radius))
                 print('Hit the surface.. Stopping ray path.')
                 break
-            elif inside:
+            elif inside and not surface_hit:
+                print('Still inside')
                 los_points.append(Coords(point, R = planet.radius))
 
         los_points = los_points[::-1]
@@ -178,31 +240,161 @@ class LineOfSight(object):
         """
         Starting from point, finds the closer intersection with shell at radius shell_radius.
         DA AGGIUNGERE! : controllo di esistenza dell'intersezione
+        # Ho 3 casi.
+        # 1 - C'è almeno una intersezione nella forward direction, do come output la più vicina, che sia in ingress o egress.
+        # 2 - Ci sono intersezioni solo in backward direction. Metto una flag backward e quando è falsa ritorno not found. Forse questa non è utile. Però vorrei che mi desse un output diverso da 3.
+        # 3 - La LOS non interseca mai la shell. Not found.
         """
-        _LOS = self.calc_LOS_vector()
+
+        print('Starting from: {}'.format(point))
+        try:
+            _LOS = self._LOS
+        except Exception as cazzillo:
+            _LOS = self.calc_LOS_vector()
+            print(cazzillo)
+
+        # Look for the closest point to origin.
+        min_R = self.get_closest_distance(refraction = refraction)
         deltino = LA.norm(point)-shell_radius
 
-        while deltino > thres:
-            deltino = LA.norm(point)-shell_radius
-            deltino = deltino/LA.linalg.dot(-normalize(point), _LOS)
-            point = self.move_along_LOS(planet, point, deltino, refraction = refraction)
-
-        return point
+        if min_R > shell_radius:
+            print('LOS does not intersect shell. Tangent altitude is {} at point {}.'.format(min_R,self.tangent_point.Spherical()))
+            i_type='No intersection'
+            return np.array(3*[np.nan]),i_type
+        elif min_R <= shell_radius and deltino < 0:
+            print('Point {} is already inside shell at radius {}. Are you looking for an egress intersection? Yet not available----zorry!'.format(Coords(point).Spherical(),shell_radius))
+            i_type='Egress'
+            return np.array(3*[np.nan]),i_type
+        else:
+            while deltino > thres:
+                deltino = LA.norm(point)-shell_radius
+                deltino = deltino/LA.linalg.dot(-normalize(point), _LOS)
+                point = self.move_along_LOS(planet, point, deltino, refraction = refraction)
+            i_type = 'Ingress'
+            return point, i_type
 
 
     def move_along_LOS(self, planet, point, step, refraction = False, backward = False):
         """
         Simply makes a step in the los. PLANNED INCLUSION OF REFRACTION.
         """
-        _LOS = self.calc_LOS_vector()
-        point += _LOS * step
+
+        try:
+            _LOS = self._LOS
+        except Exception as cazzillo:
+            _LOS = self.calc_LOS_vector()
+            print(cazzillo)
+
+        if not backward:
+            point += _LOS * step
+        else:
+            point -= _LOS * step
 
         return point
+
+
+    def get_tangent_point(self, point_0 = np.array([0,0,0]),refraction = False):
+        """
+        Returns the point of LOS which is closest to the origin.
+        """
+        try:
+            _LOS = self._LOS
+        except Exception as cazzillo:
+            _LOS = self.calc_LOS_vector()
+            print(cazzillo)
+
+        if not refraction:
+            t_point = tangent_point(_LOS, self.starting_point.Cartesian(), point = point_0)
+            self.tangent_point = Coords(t_point)
+        else:
+            pass
+            raise ValueError('Not yet available with refraction')
+
+        return Coords(t_point)
+
+
+    def get_closest_distance(self, point_0 = np.array([0,0,0]),refraction = False):
+        """
+        Returns the point of LOS which is closest to the origin.
+        """
+
+        t_point = self.get_tangent_point(point_0,refraction)
+        dist = LA.norm(t_point.Cartesian()-point_0)
+        self.min_distance = dist
+
+        return dist
 
 
 def normalize(vector):
     norm_vector = vector/LA.norm(vector)
     return norm_vector
+
+
+def angle_between(vector1,vector2,deg_output=True):
+    """
+    Returns the angle between vectors. Default output in deg.
+    """
+    v1 = normalize(vector1)
+    v2 = normalize(vector2)
+
+    angle = mt.acos(LA.linalg.dot(v1,v2))
+
+    if deg_output:
+        return deg(angle)
+    else:
+        return angle
+
+
+def orthogonal_plane(vector, point):
+    line = normalize(vector)
+
+    if line[2] != 0:
+        print('Returning plane as function of (x,y) couples')
+        def plane(x,y):
+            z = point[2] - ( line[0]*(x-point[0]) + line[1]*(y-point[1]) ) / line[2]
+            return np.array([x,y,z])
+    else:
+        print('Returning plane as function of (x,z) couples')
+        def plane(x,z):
+            y = point[1] - line[0] * (x-point[0]) / line[1]
+            return np.array([x,y,z])
+
+    return plane
+
+
+def tangent_point(vector, r_ini, point = np.array([0,0,0])):
+    """
+    For a given LOS, returns the point of minimum distance from the origin or the selected point.
+    """
+
+    t_point = t_crit_line_point(vector, r_ini, point) * normalize(vector) + r_ini
+
+    return t_point
+
+
+# def t_crit_line_point(vector, r_ini, point = np.array([0,0,0])):
+def distance_line_origin(vector, r_ini, point = np.array([0,0,0])):
+    """
+    Returns the distance between the point and the span of the vector. Origin is the standard point.
+    """
+
+    t_point = tangent_point(vector, r_ini, point)
+    dist = LA.norm(t_point-point)
+
+    return dist
+
+
+def t_crit_line_point(vector, r_ini, point = np.array([0,0,0])):
+    """
+    Ausiliary to distance_line_origin.
+    """
+    line = normalize(vector)
+    ortholine = orthogonal_plane(line, point)
+
+    tc = - LA.linalg.dot(line,(r_ini-point))
+
+    return tc
+
 
 
 class Planet(object):
@@ -242,6 +434,17 @@ class Planet(object):
             raise ValueError('atmosphere is not an AtmProfile object. Create it via Prof_ok = AtmProfile(atmosphere, grid).')
 
         self.atmosphere = atmosphere
+        self.gases = dict([])
+
+        return
+
+    def add_gas(self, gas):
+        """
+        Creates a link to an AtmProfile object containing vibtemps ...
+        """
+
+        self.gases[gas.name] = gas
+        print('Gas {} added to planet.gases.'.format(gas.name))
 
         return
 
@@ -251,6 +454,19 @@ class Titan(Planet):
         Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1000., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
 
         return
+
+    def add_default_atm(self):
+        cart2 = '/home/fedefab/Scrivania/Research/Dotto/AbstrArt/CH4_HCN_climatology/T_vibs/Test_wave2/'
+
+        ch4_nom, ch4_wave2 = pickle.load(open(cart2+'ch4_Molec_testMaya.pic','r'))
+
+        Planet.add_atmosphere(self,ch4_nom.atmosphere)
+        Planet.add_gas(self,ch4_nom)
+
+        return
+
+
+
 
 
 class Pixel(object):
@@ -2205,6 +2421,78 @@ def leggi_der_gbb(filename):
     return freq, ders
 
 
+def convert_fortformat_to_dtype(formato):
+    if formato[0] == '(' and formato[-1] == ')':
+        formato = formato[1:-1]
+
+    forms = formato.split(',')
+    pass
+
+
+def read_tabellone_emi(filename):
+    """
+    Legge i tabelloni geometrici formato emi.
+    (A40,3X,I2,3X,I2,3X,A12,3X,A21,3X,
+    E13.6,3X,
+    F8.3,3X,
+    F8.3,3X,
+    F8.3,3X,
+    F8.3,3X,
+    E12.3,3X,
+    F8.2,3X,
+    A20,3X,A20,3X,A20)
+    """
+
+    infile = open(filename, 'r')
+    data = [line.split() for line in infile]
+    data_arr = np.array(data)
+
+    names = 'obsid sample line tint res tgalt tglat tglon tgsza tglt dist azim start targname targdesc'
+    names = names.split()
+
+    # tg_alts = np.array(map(float,[pix['tgalt'] for pix in pix_tot]))
+    # tg_lats = np.array(map(float,[pix['tglat'] for pix in pix_tot]))
+    # tg_szas = np.array(map(float,[pix['tgsza'] for pix in pix_tot]))
+    # dists = np.array(map(float,[pix['dist'] for pix in pix_tot]))
+    # tint = np.array(map(float,[pix['tint'][0] for pix in pix_tot]))
+    tg_alts = []
+    tg_lats = []
+    tg_szas = []
+    dists = []
+    tint = []
+    cubes = []
+
+    pixels = []
+    for linea in data_arr:
+        #lineuz = np.array(linea,dtype='|S40,i2,i2,|S12,|S21'+7*',f8'+3*',|S20')
+        #print(len(linea))
+        pix = dict(zip(names,linea))
+        try:
+            gi = float(pix['tgalt'])
+            gi = float(pix['tglat'])
+            gi = float(pix['tgsza'])
+            gi = float(pix['dist'])
+            gitint = float(pix['tint'][1:-1].split(',')[0])
+            gi = pix['obsid']
+            tg_alts.append(float(pix['tgalt']))
+            tg_lats.append(float(pix['tglat']))
+            tg_szas.append(float(pix['tgsza']))
+            dists.append(float(pix['dist']))
+            tint.append(gitint)
+            cubes.append(pix['obsid'])
+        except Exception as cazzillo:
+            # print(linea)
+            # print(pix)
+            # raise cazzillo
+            #print(cazzillo)
+            continue
+        pixels.append(pix)
+
+    cose = [tg_alts,tg_lats,tg_szas,dists,tint,cubes]
+
+    return pixels, cose
+
+
 def prova_cmap(cma=None):
     """
     Shows colorbar with selected cmap.
@@ -2354,7 +2642,16 @@ def carttosph(r, R = Rtit, output_in_deg = True):
     h = dist - R
     lat = mt.asin(r[2]/dist)
     #lon = mt.atan(r[1]/r[0])
-    lon = mt.acos(r[0]/(dist*mt.cos(lat)))
+    #print('eja',r[0]/(dist*mt.cos(lat)),r[0]/(dist*mt.sqrt(1-(r[2]/dist)**2)),r[0],dist,deg(lat))
+    try:
+        lon = mt.acos(r[0]/(dist*mt.sqrt(1-(r[2]/dist)**2))) #mt.cos(lat)))
+    except ValueError:
+        print('Correcting numerical error.. -> we are at the edges of the math domain: {} is not in [-1,1]'.format(r[0]/(dist*mt.sqrt(1-(r[2]/dist)**2))))
+        if r[0] > 0:
+            lon = np.pi
+        else:
+            lon = -np.pi
+
     if r[1] < 0:
         lon = 2*np.pi-lon
 
