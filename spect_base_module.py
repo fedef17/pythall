@@ -13,7 +13,7 @@ import scipy.constants as const
 import warnings
 import copy
 import pickle
-
+import time
 
 #parameters
 Rtit = 2575.0 # km
@@ -592,12 +592,12 @@ class Molec(object):
 
         return
 
-    def add_iso(self, num, MM=None, ratio = None):
+    def add_iso(self, num, MM=None, ratio = None, LTE = False):
         """
         Adds an isotope in form of an IsoMolec object.
         """
         string = 'iso_{:1d}'.format(num)
-        iso = IsoMolec(self.mol,num,MM=MM,ratio=ratio)
+        iso = IsoMolec(self.mol, num, MM=MM, ratio=ratio, LTE=LTE)
         setattr(self, string, iso)
         print('Added isotopologue {} for molecule {}'.format(string,self.name))
         self.n_iso += 1
@@ -621,16 +621,17 @@ class IsoMolec(object):
     Class to represent isotopes, with iso-ratios, vibrational levels, vib. temperatures, (for now).
     """
 
-    def __init__(self, mol, iso, MM=None, ratio=None):
+    def __init__(self, mol, iso, LTE = False, MM=None, ratio=None):
         self.mol = mol   # mol number
         self.iso = iso   # iso number
         self.MM = MM   # mol mass
         self.ratio = ratio   # isotopic ratio
         self.n_lev = 0 # number of levels specified
         self.levels = []
+        self.is_in_LTE = LTE
         return
 
-    def add_levels(self, lev_strings, energies, vibtemps = None, degeneracies = None, simmetries = None):
+    def add_levels(self, lev_strings, energies, vibtemps = None, degeneracies = None, simmetries = None, add_fundamental = False, T_kin = None):
         """
         Adds vibrational levels to selected isotopologue.
         """
@@ -642,11 +643,24 @@ class IsoMolec(object):
         if vibtemps is None:
             vibtemps = len(lev_strings)*[None]
 
+        if add_fundamental:
+            cos = extract_quanta_ch4(lev_strings[0])[0]
+            lev_fun = []
+            lev_0 = ''
+            for el in cos:
+                lev_fun.append(0)
+                lev_0 += '0 '
+
+            energies.insert(0,0.0)
+            lev_strings.insert(0, lev_0)
+            T_kin = AtmProfile(T_kin, vibtemps[0].grid)
+            vibtemps.insert(0, T_kin)
+
         for levstr,ene,deg,sim,i,vib in zip(lev_strings,energies,degeneracies,simmetries,range(len(lev_strings)),vibtemps):
             print('Level <{}>, energy {} cm-1'.format(levstr,ene))
             string = 'lev_{:02d}'.format(i)
             self.levels.append(string)
-            lev = Level(levstr, ene, degeneracy = deg, simmetry = sim)
+            lev = Level(self.mol, self.iso, levstr, ene, degeneracy = deg, simmetry = sim)
             if vib is not None:
                 lev.add_vibtemp(vib)
             setattr(self,string,lev)
@@ -660,7 +674,7 @@ class IsoMolec(object):
         """
         print('Level <{}>, energy {} cm-1'.format(lev_string,energy))
         string = 'lev_{:02d}'.format(self.n_lev)
-        lev = Level(lev_string, energy, degeneracy = degeneracy, simmetry = simmetry)
+        lev = Level(self.mol, self.iso, lev_string, energy, degeneracy = degeneracy, simmetry = simmetry)
         if vibtemp is not None:
             lev.add_vibtemp(vibtemp)
         setattr(self,string,lev)
@@ -675,7 +689,7 @@ class IsoMolec(object):
         found = False
         for lev in self.levels:
             level = getattr(self, lev)
-            qlev = level.get_quanta(self.mol)
+            qlev = level.get_quanta()
             if simmetry is None:
                 if qlev[0] == quanta:
                     found = True
@@ -698,7 +712,9 @@ class Level(object):
     Planned: decomposition of HITRAN strings in vib quanta.
     """
 
-    def __init__(self, levstring, energy, degeneracy = -1, simmetry = []):
+    def __init__(self, mol, iso, levstring, energy, degeneracy = -1, simmetry = []):
+        self.mol = mol
+        self.iso = iso
         self.lev_string = levstring
         self.energy = energy
         self.degeneracy = degeneracy
@@ -717,16 +733,36 @@ class Level(object):
 
         return
 
-    def get_quanta(self, mol):
+    def get_quanta(self):
         """
         Reads from the lev_string the quantum numbers and returns a list plus a simmetry. Need to specify the molecule for now. Output format: ([n1, n2, n3, ..], simmetry)
         """
-        if mol == 6:
+        if self.mol == 6:
             quanta = extract_quanta_ch4(self.lev_string)
         else:
-            raise ValueError('No routine available for molecule {}'.format(mol))
+            raise ValueError('No routine available for molecule {}'.format(self.mol))
 
         return quanta
+
+    def equiv(self, string_lev, check_simmetry = False):
+        """
+        Returns true if string_lev has the same quanta of Level. If check_simmetry is set to True, returns True only if also the simmetry is the same.
+        """
+        if self.mol == 6:
+            quanta_2 = extract_quanta_ch4(string_lev)
+            quanta = self.get_quanta()
+        else:
+            raise ValueError('No routine available for molecule {}'.format(self.mol))
+
+        equiv = False
+        if quanta[0] == quanta_2[0]:
+            equiv = True
+
+        if check_simmetry:
+            if quanta[1] != quanta_2[1]:
+                equiv = False
+
+        return equiv
 
 
 class CosaScema(np.ndarray):
@@ -800,6 +836,8 @@ class AtmProfile(object):
             print('No gridname set. Enter names for the coordinate grid')
 
         if interp is not None:
+            if type(interp) is str:
+                interp = [interp]
             for ino in interp:
                 nam = ['lin','exp','box']
                 try:
@@ -841,7 +879,10 @@ class AtmProfile(object):
         self.names.append(profname)
 
         if interp is not None:
+            if type(interp) is str:
+                interp = [interp]
             for ino in interp:
+                print(ino)
                 nam = ['lin','exp','box']
                 try:
                     nam.index(ino)
@@ -1515,7 +1556,7 @@ def write_obs(n_freq, n_limb, dists, alts, freq, obs, flags, filename, old_file 
     return
 
 
-def read_input_prof_gbb(filename, type, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4):
+def read_input_prof_gbb(filename, ptype, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4):
     """
     Reads input profiles from gbb standard formatted files (in_temp.dat, in_pres.dat, in_vmr_prof.dat).
     Profile order is from surface to TOA.
@@ -1526,8 +1567,8 @@ def read_input_prof_gbb(filename, type, n_alt = 151, alt_step = 10.0, n_gas = 86
 
     infile = open(filename, 'r')
 
-    if(type == 'vmr'):
-        print(type)
+    if(ptype == 'vmr'):
+        print(ptype)
         trova_spip(infile)
         trova_spip(infile)
         first = 1
@@ -1554,8 +1595,8 @@ def read_input_prof_gbb(filename, type, n_alt = 151, alt_step = 10.0, n_gas = 86
         proftot = np.array(proftot)
 
 
-    if(type == 'temp' or type == 'pres'):
-        print(type)
+    if(ptype == 'temp' or ptype == 'pres'):
+        print(ptype)
         trova_spip(infile)
         trova_spip(infile)
         prof = []
@@ -1956,7 +1997,12 @@ def read_tvib_manuel(filename):
 
     infile.close()
 
-    return alts, molecs, levels, energies, vibtemps
+    vib_ok = []
+    for tempu in vibtemps:
+        tempu_ok = AtmProfile(np.array(tempu),np.array(alts))
+        vib_ok.append(tempu_ok)
+
+    return alts, molecs, levels, energies, vib_ok
 
 
 def write_input_atm_man(filename, z, T, P, n_alt = 301, alt_step = 5.0):
