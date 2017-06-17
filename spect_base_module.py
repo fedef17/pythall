@@ -14,6 +14,7 @@ import warnings
 import copy
 import pickle
 import time
+import spect_main_module as smm
 
 #parameters
 Rtit = 2575.0 # km
@@ -81,10 +82,7 @@ class LineOfSight(object):
     def __init__(self, spacecraft_coords, second_point):
         self.starting_point = copy.deepcopy(spacecraft_coords)
         self.second_point = copy.deepcopy(second_point)
-        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
-        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
-        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
-        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
+        self.atm_quantities = dict()
 
         return
 
@@ -114,7 +112,7 @@ class LineOfSight(object):
 
         return
 
-    def calc_along_LOS(self, atmosphere, profname, curgod = False, set_attr = False, set_attr_name = None):
+    def calc_along_LOS(self, atmosphere, profname = None, curgod = False, set_attr = False, set_attr_name = None):
         """
         Returns a vector with prof values on the LOS.
         ###################### WIPPPPPP
@@ -122,12 +120,17 @@ class LineOfSight(object):
         method available: simple, curgod
         """
 
+        if profname is None:
+            nomi = atmosphere.names
+            if len(nomi) > 1:
+                raise ValueError('specify the profile to be used, among these: {}'.format(nomi))
+            else:
+                profname = nomi[0]
+
         try:
             points = self.intersections
         except:
             points = self.calc_atm_intersections(planet)
-
-        self.atm_quantities = dict([])
 
         quant = []
 
@@ -137,6 +140,7 @@ class LineOfSight(object):
             if curgod:
                 print('Not yet available! Doing simple interpolation..')
 
+        print('PUPPAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
         if set_attr:
             if set_attr_name is None:
                 set_attr_name = profname
@@ -226,14 +230,161 @@ class LineOfSight(object):
                 print('Hit the surface.. Stopping ray path.')
                 break
             elif inside and not surface_hit:
-                print('Still inside')
-                los_points.append(Coords(point, R = planet.radius))
+                po = Coords(point, R = planet.radius)
+                los_points.append(copy.deepcopy(po))
+                print('Still inside at {} (spherical)'.format(po.Spherical()))
 
         los_points = los_points[::-1]
 
         self.intersections = los_points
 
         return los_points
+
+    def calc_abundance(self, planet, gas, set_attr = False):
+        """
+        Calculates abundance (num density) of the gas among planet.gases along the LOS.
+        """
+        vmr_gas = self.calc_along_LOS(planet.gases[gas].abundance)
+
+        n_dens = []
+        #print('puppa')
+        #print(self.atm_quantities)
+        for P, T, vmr in zip(self.atm_quantities['temp'], self.atm_quantities['pres'], vmr_gas):
+            n_dens.append(num_density(P, T, vmr))
+
+        if set_attr:
+            self.atm_quantities[gas] = np.array(n_dens)
+
+        return np.array(n_dens)
+
+
+    def calc_optical_depth(self, wn_range, planet, lines, step = None, cartLUTs = None):
+        """
+        Calculates the optical depth along the LOS.
+        """
+
+        abs_opt_depth = smm.prepare_spe_grid(wn_range)
+        emi_opt_depth = smm.prepare_spe_grid(wn_range)
+
+        single_coeffs_abs = dict()
+        single_coeffs_emi = dict()
+
+        for gas in planet.gases:
+            print(gas)
+            gasso = planet.gases[gas]
+            n_dens = self.calc_abundance(planet, gas)
+            print('aaaaaaaaaaaaaaaaaargh ', n_dens)
+            iso_abs = []
+            iso_emi = []
+            print(gasso.all_iso)
+            for iso in gasso.all_iso:
+                isomol = getattr(gasso, iso)
+                print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
+                if not isomol.is_in_LTE:
+                    for lev in isomol.levels:
+                        #print(lev)
+                        levello = getattr(isomol, lev)
+                        tvi = self.calc_along_LOS(levello.vibtemp)
+                        levello.add_local_vibtemp(tvi)
+
+                set_abs = []
+                set_emi = []
+
+                print('Catulloneeeeeeee')
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs)
+                iso_ab = isomol.ratio
+                for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, n_dens):
+                    print(aboo,emoo,ndoo,iso_ab)
+                    abs_coeff_tot = smm.prepare_spe_grid(wn_range)
+                    emi_coeff_tot = smm.prepare_spe_grid(wn_range)
+                    abs_coeff_tot.add_to_spectrum(aboo, Strength = iso_ab*ndoo)
+                    emi_coeff_tot.add_to_spectrum(emoo, Strength = iso_ab*ndoo)
+                    set_abs.append(abs_coeff_tot)
+                    set_emi.append(emi_coeff_tot)
+
+                iso_abs.append(set_abs)
+                iso_emi.append(set_emi)
+            single_coeffs_abs[gas] = copy.deepcopy(iso_abs)
+            single_coeffs_emi[gas] = copy.deepcopy(iso_emi)
+
+        steps = [step]*len(single_coeffs_abs)
+        for gas in planet.gases:
+            for isoco in single_coeffs_abs[gas]:
+                self.spectralsum_along_LOS(abs_opt_depth, isoco, strengths = steps)
+            for isoco in single_coeffs_emi[gas]:
+                self.spectralsum_along_LOS(emi_opt_depth, isoco, strengths = steps)
+
+        return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
+
+
+    def radtran(self, wn_range, planet, lines, step = None, cartLUTs = None):
+        """
+        Calculates the optical depth along the LOS.
+        """
+
+        abs_opt_depth = smm.prepare_spe_grid(wn_range)
+        emi_opt_depth = smm.prepare_spe_grid(wn_range)
+
+        single_coeffs_abs = dict()
+        single_coeffs_emi = dict()
+
+        for gas in planet.gases:
+            print(gas)
+            gasso = planet.gases[gas]
+            n_dens = self.calc_abundance(planet, gas)
+            print('aaaaaaaaaaaaaaaaaargh ', n_dens)
+            iso_abs = []
+            iso_emi = []
+            print(gasso.all_iso)
+            for iso in gasso.all_iso:
+                isomol = getattr(gasso, iso)
+                print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
+                if not isomol.is_in_LTE:
+                    for lev in isomol.levels:
+                        #print(lev)
+                        levello = getattr(isomol, lev)
+                        tvi = self.calc_along_LOS(levello.vibtemp)
+                        levello.add_local_vibtemp(tvi)
+
+                set_abs = []
+                set_emi = []
+
+                print('Catulloneeeeeeee')
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs)
+                iso_ab = isomol.ratio
+                for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, n_dens):
+                    print(aboo,emoo,ndoo,iso_ab)
+                    abs_coeff_tot = smm.prepare_spe_grid(wn_range)
+                    emi_coeff_tot = smm.prepare_spe_grid(wn_range)
+                    abs_coeff_tot.add_to_spectrum(aboo, Strength = iso_ab*ndoo)
+                    emi_coeff_tot.add_to_spectrum(emoo, Strength = iso_ab*ndoo)
+                    set_abs.append(abs_coeff_tot)
+                    set_emi.append(emi_coeff_tot)
+
+                iso_abs.append(set_abs)
+                iso_emi.append(set_emi)
+            single_coeffs_abs[gas] = copy.deepcopy(iso_abs)
+            single_coeffs_emi[gas] = copy.deepcopy(iso_emi)
+
+        steps = [step]*len(single_coeffs_abs)
+        for gas in planet.gases:
+            for isoco in single_coeffs_abs[gas]:
+                self.spectralsum_along_LOS(abs_opt_depth, isoco, strengths = steps)
+            for isoco in single_coeffs_emi[gas]:
+                self.spectralsum_along_LOS(emi_opt_depth, isoco, strengths = steps)
+
+        return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
+
+
+    def spectralsum_along_LOS(self, abs_coeff, single_coeffs, strengths = None):
+        if strengths is None:
+            strengths = None*len(single_coeffs)
+        #for step, coef, theforce in zip(self.intersections().steps, single_coeffs, strengths):
+        for coef, theforce in zip(single_coeffs, strengths):
+            abs_coeff.add_to_spectrum(coef, Strength = theforce)
+
+        return abs_coeff
+
 
 
     def intersect_shell(self, planet, point, shell_radius, thres = 0.1, refraction = False):
@@ -323,6 +474,15 @@ class LineOfSight(object):
         self.min_distance = dist
 
         return dist
+
+
+def num_density(P, T, vmr):
+    """
+    Calculates num density. P in hPa, T in K, vmr in absolute fraction (not ppm!!)
+    """
+    n = vmr*P/(kb*T) # num. density in cm-3
+
+    return n
 
 
 def normalize(vector):
@@ -443,7 +603,7 @@ class Planet(object):
         Creates a link to an AtmProfile object containing vibtemps ...
         """
 
-        self.gases[gas.name] = gas
+        self.gases[gas.name] = copy.deepcopy(gas)
         print('Gas {} added to planet.gases.'.format(gas.name))
 
         return
@@ -451,7 +611,7 @@ class Planet(object):
 
 class Titan(Planet):
     def __init__(self):
-        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1000., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
+        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1200., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
 
         return
 
@@ -478,7 +638,7 @@ class Pixel(object):
         if keys is None:
             return
         for key, thing in zip(keys,things):
-            setattr(self,key,thing)
+            setattr(self,key,copy.deepcopy(thing))
         # self.cube = cube
         # self.year = year
         # self.dist = dist
@@ -572,37 +732,74 @@ class Molec(object):
     Class to represent molecules, composed by isoMolecules.
     """
 
-    def __init__(self, mol, name, MM=None):
+    def __init__(self, mol, name=None):
         self.mol = mol   # mol number
         self.name = name # string representing the molecular name
-        self.MM = MM   # average molecular mass
+        if name is None:
+            self.name = find_molec_metadata(mol, 1)['mol_name']
         self.abundance = None
         self.n_iso = 0
         self.all_iso = []
         return
 
-    def add_clim(self, profile, type = 'VMR'):
+    def add_all_iso_from_HITRAN(self, lines = None, add_levels = True, custom_iso_ratios = None):
+        """
+        Creates and adds to Molec all isotopologues in HITRAN. The ones already added manually remain there. custom_iso_ratios is intended from the first isotopologue to be added.
+        """
+        if add_levels and lines is None:
+            raise ValueError('Cannot load levels without a lines set. Please provide one')
+
+        iso_names, iso_MM, iso_ratios = find_all_iso_HITRAN(self.mol)
+
+        cos = len(self.all_iso)
+        iso_names = iso_names[cos:]
+        iso_MM = iso_MM[cos:]
+        iso_ratios = iso_ratios[cos:]
+
+        if custom_iso_ratios is not None:
+            ok = len(custom_iso_ratios)
+            iso_ratios = custom_iso_ratios + iso_ratios[ok:]
+
+        num = cos + 1
+        for ratio in zip(iso_ratios):
+            self.add_iso(num, ratio = ratio)
+            num += 1
+
+        if add_levels:
+            for iso in self.all_iso[cos:]:
+                isomol = getattr(self, iso)
+                isomol.add_levels_from_HITRAN(lines)
+
+        return
+
+    def add_clim(self, profile):
         """
         Defines a climatology for the molecule. profile is the molecular abundance, has to be an AtmProfile object. type can be either 'VMR' or 'num_density (cm-3)'
         """
         if type(profile) is not AtmProfile:
             raise ValueError('Profile is not an AtmProfile object. Create it via Prof_ok = AtmProfile(profile, grid).')
-        setattr(self, 'abundance', profile)
+        self.abundance = copy.deepcopy(profile)
         print('Added climatology for molecule {}'.format(self.name))
 
         return
 
-    def add_iso(self, num, MM=None, ratio = None, LTE = False):
+    def add_iso(self, num, ratio = None, LTE = True):
         """
         Adds an isotope in form of an IsoMolec object.
         """
         string = 'iso_{:1d}'.format(num)
-        iso = IsoMolec(self.mol, num, MM=MM, ratio=ratio, LTE=LTE)
+
+        try:
+            iso = IsoMolec(self.mol, num, ratio=ratio, LTE=LTE)
+        except:
+            print('Molecule {} has no iso {} in HITRAN'.format(self.mol, num))
+            return False
         setattr(self, string, iso)
         print('Added isotopologue {} for molecule {}'.format(string,self.name))
         self.n_iso += 1
         self.all_iso.append(string)
-        return
+
+        return True
 
     def link_to_atmos(self, atmosphere, copy = False):
         """
@@ -611,9 +808,121 @@ class Molec(object):
         if not copy:
             self.atmosphere = atmosphere
         else:
-            raise Exception('DEVO ANCORA SCRIVERLO!')
+            self.atmosphere = copy.deepcopy(atmosphere)
 
         return
+
+
+def find_all_iso_HITRAN(mol, metadatafile = './molparam.txt'):
+    """
+    Finds all isotopologues of molecule in the HITRAN list.
+    """
+    iso_names = []
+    iso_MM = []
+    iso_ratios = []
+    for num in range(1,12):
+        try:
+            resu = find_molec_metadata(mol, num)
+            print(resu)
+            iso_names.append(resu['iso_name'])
+            iso_MM.append(resu['iso_MM'])
+            iso_ratios.append(resu['iso_ratio'])
+        except:
+            break
+
+    return iso_names, iso_MM, iso_ratios
+
+
+def find_levels_isomol_HITRAN(lines, mol, iso):
+    """
+    Finds all vibrational levels of molecule-iso in the HITRAN line list. Puts degenerate levels with different simmetries in the same level (adding simmetry to simmetries). Also finds the lower energy of the level, corresponding to the rotational fundamental.
+    """
+    lev_strings = []
+    energies = []
+    simmetries = []
+
+    lines = [lin for lin in lines if lin.Mol == mol and lin.Iso == iso]
+
+    levs = [lin.Lo_lev_str for lin in lines]+[lin.Up_lev_str for lin in lines]
+    #print(levs)
+    levs = np.unique(np.array(levs))
+    #print(levs)
+
+    minlevs = []
+    for lev in levs:
+        #print(lev)
+        minst, vq, ot = extract_quanta_HITRAN(mol, iso, lev)
+        if minst == '':
+            continue
+        minlevs.append(minst)
+
+    #print(minlevs)
+    minlevs = np.unique(np.array(minlevs))
+    #print(minlevs)
+
+    for lev in minlevs:
+        lines_lev = [lin for lin in lines if minimal_level_string(mol, iso, lev) == lin.minimal_level_string_lo()]
+        if len(lines_lev) > 0:
+            energy = np.min(np.array([lin.E_lower for lin in lines_lev]))
+            simmetries_lev = np.unique(np.array([lin.Lo_lev_str for lin in lines_lev]))
+            simmetries_lev = list(simmetries_lev)
+        else:
+            lines_lev = [lin for lin in lines if minimal_level_string(mol, iso, lev) == lin.minimal_level_string_up()]
+            energy = np.min(np.array([(lin.E_lower+lin.Freq) for lin in lines_lev]))
+            simmetries_lev = np.unique(np.array([lin.Up_lev_str for lin in lines_lev]))
+            simmetries_lev = list(simmetries_lev)
+        if lev == '':
+            continue
+        iii = 0
+        for sim in simmetries_lev:
+            if sim.strip() == '':
+                simmetries_lev.pop(iii)
+            iii+=1
+        lev_strings.append(lev)
+        energies.append(energy)
+        simmetries.append(simmetries_lev)
+
+    print(lev_strings)
+    print(energies)
+    print(simmetries)
+
+    energies = np.array(energies)
+    lev_strings = np.array(lev_strings)
+    simmetries = np.array(simmetries)
+
+    order = np.argsort(energies)
+    energies = list(energies[order])
+    lev_strings = list(lev_strings[order])
+    simmetries = list(simmetries[order])
+
+    return lev_strings, energies, simmetries
+
+
+def find_molec_metadata(mol, iso, filename = './molparam.txt'):
+    """
+    Loads molecular metadata from the molparam.txt HITRAN file. Returns a dict with: mol. name, iso. name, iso. ratio, iso. MM
+    """
+
+    print('Looking for mol {}, iso {}'.format(mol,iso))
+    resu = dict()
+
+    infile = open(filename,'r')
+    for i in range(mol):
+        find_spip(infile)
+        resu['mol_name'] = infile.readline().split()[0]
+    for i in range(iso-1):
+        linea = infile.readline()
+
+    linea_ok = infile.readline().split()
+    if linea_ok[0] == '#':
+            return None
+
+    print(linea_ok)
+    resu['iso_name'] = linea_ok[0]
+    resu['iso_ratio'] = float(linea_ok[1])
+    resu['iso_MM'] = float(linea_ok[4])
+
+    return resu
 
 
 class IsoMolec(object):
@@ -621,15 +930,44 @@ class IsoMolec(object):
     Class to represent isotopes, with iso-ratios, vibrational levels, vib. temperatures, (for now).
     """
 
-    def __init__(self, mol, iso, LTE = False, MM=None, ratio=None):
+    def __init__(self, mol, iso, LTE = True, ratio=None):
         self.mol = mol   # mol number
         self.iso = iso   # iso number
-        self.MM = MM   # mol mass
-        self.ratio = ratio   # isotopic ratio
+        resu = find_molec_metadata(mol, iso)
+        self.mol_name = resu['mol_name']
+        self.name = resu['iso_name']
+        self.MM = resu['iso_MM']   # mol mass
+        if ratio is None:
+            self.ratio = resu['iso_ratio']
+        else:
+            self.ratio = ratio   # isotopic ratio
         self.n_lev = 0 # number of levels specified
         self.levels = []
         self.is_in_LTE = LTE
         return
+
+    def add_levels_from_HITRAN(self, lines):
+        """
+        Checks in HITRAN database all lines belonging to the isotopologue and finds all vibrational levels and their energies. Experimental, hope it works for every molecule.
+
+        --------------- ATTENTION!!!! --------------------------------
+        If the line list is incomplete (narrow wn_range) the level list will also be incomplete or have wrong informations (energies, simmetries...). Give here a LARGE set of lines, even all those in the database.
+        """
+        levels, energies, simmetries = find_levels_isomol_HITRAN(lines, self.mol, self.iso)
+        self.add_levels(levels, energies, simmetries = simmetries)
+
+        return levels, energies, simmetries
+
+    def add_simmetries_levels(self, lines):
+        levels, energies, simmetries = find_levels_isomol_HITRAN(lines, self.mol, self.iso)
+        for lev in self.levels:
+            levvo = getattr(self, lev)
+            for levu, simm in zip(levels, simmetries):
+                print(levu,levvo.minimal_level_string())
+                if levvo.minimal_level_string() == minimal_level_string(self.mol, self.iso, levu):
+                    levvo.add_simmetries(simm)
+        return
+
 
     def add_levels(self, lev_strings, energies, vibtemps = None, degeneracies = None, simmetries = None, add_fundamental = False, T_kin = None):
         """
@@ -642,28 +980,52 @@ class IsoMolec(object):
             simmetries = len(lev_strings)*[[]]
         if vibtemps is None:
             vibtemps = len(lev_strings)*[None]
+        else:
+            self.is_in_LTE = False
+            for vit in vibtemps:
+                print(type(vit))
+
+        print(lev_strings)
 
         if add_fundamental:
-            cos = extract_quanta_ch4(lev_strings[0])[0]
-            lev_fun = []
+            minstr = extract_quanta_HITRAN(self.mol, self.iso, lev_strings[0])[0]
+            print('stocazzzoooooo '+minstr, lev_strings[0])
             lev_0 = ''
-            for el in cos:
-                lev_fun.append(0)
-                lev_0 += '0 '
+            for lett in minstr:
+                try:
+                    num = int(lett)
+                    lev_0 += '0'
+                except:
+                    lev_0 += lett
+            print('stocazzzooooooo '+lev_0)
 
             energies.insert(0,0.0)
             lev_strings.insert(0, lev_0)
-            T_kin = AtmProfile(T_kin, vibtemps[0].grid)
-            vibtemps.insert(0, T_kin)
+            simmetries.insert(0, None)
+            degeneracies.insert(0, None)
+            if vibtemps[0] is not None:
+                T_kin = AtmProfile(T_kin, vibtemps[0].grid)
+                vibtemps.insert(0, T_kin)
+            else:
+                vibtemps.insert(0, None)
+
+        print(lev_strings)
 
         for levstr,ene,deg,sim,i,vib in zip(lev_strings,energies,degeneracies,simmetries,range(len(lev_strings)),vibtemps):
             print('Level <{}>, energy {} cm-1'.format(levstr,ene))
-            string = 'lev_{:02d}'.format(i)
-            self.levels.append(string)
+            stringaa = 'lev_{:02d}'.format(i)
+            self.levels.append(stringaa)
             lev = Level(self.mol, self.iso, levstr, ene, degeneracy = deg, simmetry = sim)
+            print('cerca ok qui sotto')
             if vib is not None:
+                print('oooook')
                 lev.add_vibtemp(vib)
-            setattr(self,string,lev)
+            print(stringaa)
+            setattr(self,stringaa,copy.deepcopy(lev))
+            print(type(getattr(self,stringaa)))
+
+
+
             self.n_lev += 1
 
         return
@@ -728,41 +1090,75 @@ class Level(object):
         """
         if type(profile) is not AtmProfile:
             raise ValueError('Profile is not an AtmProfile object. Create it via Prof_ok = AtmProfile(profile, grid).')
-        setattr(self, 'vibtemp', profile)
+        self.vibtemp = copy.deepcopy(profile)
         print('Added vibrational temperature to level <{}>'.format(self.lev_string))
 
         return
 
+    def add_simmetries(self, simmetries):
+        self.simmetry = simmetries
+        return
+
+    def add_local_vibtemp(self,vibtemp):
+        """
+        Adds attribute local_vibtemp to level. vibtemp could be either a scalar or a list/array.
+        """
+        try:
+            len(vibtemp)
+        except:
+            vibtemp = [vibtemp]
+
+        self.local_vibtemp = copy.deepcopy(vibtemp)
+        return
+
+    def add_Gcoeffs(self,Gcoeffs):
+        """
+        Adds attribute Gcoeffs to level. Gcoeffs is a dictionary with three values: "absorption", "ind_emission", "sp_emission". Each value is a SpectralGcoeff object corresponding to level.
+        """
+        if type(Gcoeffs) is dict:
+            Gcoeffs = [Gcoeffs]
+        self.Gcoeffs = copy.deepcopy(Gcoeffs)
+        return
+
     def get_quanta(self):
         """
-        Reads from the lev_string the quantum numbers and returns a list plus a simmetry. Need to specify the molecule for now. Output format: ([n1, n2, n3, ..], simmetry)
+        Reads vibrational quanta and other quantum numbers. vib_quanta is a list, others is a dict.
         """
-        if self.mol == 6:
-            quanta = extract_quanta_ch4(self.lev_string)
-        else:
-            raise ValueError('No routine available for molecule {}'.format(self.mol))
 
-        return quanta
+        qu, vib_quanta, others = extract_quanta_HITRAN(self.mol, self.iso, self.simmetry[0])
 
-    def equiv(self, string_lev, check_simmetry = False):
+        if vib_quanta is None:
+            raise ValueError('Not possible to extract vib_quanta for molecule {}, iso {}'.format(self.mol, self.iso))
+
+        return vib_quanta, others
+
+    def equiv(self, string_lev, check_minor_numbers = False):
         """
         Returns true if string_lev has the same quanta of Level. If check_simmetry is set to True, returns True only if also the simmetry is the same.
         """
-        if self.mol == 6:
-            quanta_2 = extract_quanta_ch4(string_lev)
-            quanta = self.get_quanta()
-        else:
-            raise ValueError('No routine available for molecule {}'.format(self.mol))
+        minst, vibq, oth = extract_quanta_HITRAN(self.mol, self.iso, self.simmetry[0])
+        minst2, vibq2, oth2 = extract_quanta_HITRAN(self.mol, self.iso, string_lev)
 
-        equiv = False
-        if quanta[0] == quanta_2[0]:
+        if minst == minst2:
             equiv = True
 
-        if check_simmetry:
-            if quanta[1] != quanta_2[1]:
+        if check_minor_numbers:
+            if oth != oth2:
                 equiv = False
 
         return equiv
+
+    def minimal_level_string(self):
+        return minimal_level_string(self.mol, self.iso, self.lev_string)
+
+
+def minimal_level_string(mol, iso, lev_string):
+    if len(lev_string) == 15:
+        minimal_level_string, qu, qi = extract_quanta_HITRAN(mol, iso, lev_string)
+    else:
+        minimal_level_string = lev_string.strip()
+
+    return minimal_level_string
 
 
 class CosaScema(np.ndarray):
@@ -893,8 +1289,10 @@ class AtmProfile(object):
         else:
             interp = np.array(['lin']*self.ndim)
             if profname == 'pres':
-                indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
-                interp[indx] = 'exp'
+                try:
+                    indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
+                except:
+                    interp[0] = 'exp'
             self.interp.append(interp)
             print('No interp found, interp set to default: {}'.format(interp))
 
@@ -938,6 +1336,14 @@ class AtmProfile(object):
         :param profname: name of the profile to calculate (es: 'temp', 'pres')
         :return: If only one profile is stored in AtmProfile, the output is a number. If there are more profiles stored in AtmProfile, the output of calc is a dict containing all interpolated values. If profname is set (ex. 'temp') returns the value of the profile 'temp' at the point.
         """
+
+        try:
+            len(point)
+            if type(point) is list:
+                point = np.array(point)
+        except:
+            point = np.array([point])
+
         resu = []
         for nam, i in zip(self.names, range(len(self.names))):
             prof = getattr(self, nam)
@@ -992,121 +1398,121 @@ class AtmProfile(object):
 
 #### FINE AtmProfile class
 
-class AtmProfile_ndarr(np.ndarray):
-    """
-    Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
-    Contains a set of interp strings to determine the type of interpolation.
-    Input:
-        grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza) ..
-        gridname -------> names for the dimensions of grid
-        profile --------> profile : same dimensions as grid
-        interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
-        hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
-    """
-
-    def __new__(cls, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
-
-        obj = np.asarray(profile).view(cls)
-
-        obj.descr = descr
-        setattr(obj, profname, profile.copy())
-
-        _all_ = []
-        _all_.append(profname)
-        obj._all_ = _all_
-
-        if grid.ndim == 1:
-            grid = np.array([grid])
-            print('Transformed grid to a 1-dim grid array',np.shape(grid))
-
-        obj.grid = grid.copy()
-
-        if obj.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
-
-        if interp is not None:
-            for ino in interp:
-                nam = ['lin','exp','box']
-                try:
-                    nam.index(ino)
-                except ValueError:
-                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
-            obj.interp = np.array(interp)
-        else:
-            obj.interp = np.array(['lin']*obj.ndim)
-            print('No interp found, interp set to default: {}'.format(obj.interp))
-
-        if gridname is not None:
-            obj.gridname = np.array(gridname)
-            for name,coord in zip(gridname,grid):
-                setattr(obj,name,np.sort(np.unique(coord)))
-        else:
-            obj.gridname = np.array(['']*obj.ndim)
-            print('No gridname set. Enter names for the coordinate grid')
-
-        if hierarchy is not None:
-            obj.hierarchy = np.array(hierarchy)
-        else:
-            obj.hierarchy = np.arange(obj.ndim)
-            print('No hierarchy found, hierarchy set to default: {}'.format(obj.hierarchy))
-        for val in np.unique(obj.hierarchy):
-            oi = (obj.hierarchy == val)
-            if len(np.unique(obj.interp[oi])) > 1:
-                raise ValueError('Can not interpolate 2D between int and exp coordinates!')
-            elif np.unique(obj.interp[oi])[0] == 'exp':
-                raise ValueError('Can not interpolate 2D between exp coordinates!')
-
-        return obj
-
-    def __array_finalize__(self, obj):
-        if obj is None: return
-        self.descr = getattr(obj, 'descr', None)
-        self.grid = getattr(obj, 'grid', None)
-        self.prof = getattr(obj, 'prof', None)
-        self._all_ = getattr(obj, '_all_', None)
-        self.interp = getattr(obj, 'interp', None)
-        self.hierarchy = getattr(obj, 'hierarchy', None)
-        return
-
-    # def __getitem__(self, *args, **kwargs):
-    #     for name in self._all_:
-    #         profilo = getattr(self, name)
-    #         sliced_prof = profilo.__getitem__(*args,**kwargs)
-    #         setattr(obj, name, sliced_prof)
-    #     np.ndarray.__getitem__(self.array_view, *args, **kwargs)
-    #     return
-    #
-    # def __getslice__(self, *args, **kwargs):
-    #     for name in self._all_:
-    #         profilo = getattr(self, name)
-    #         sliced_prof = profilo.__getslice__(*args,**kwargs)
-    #         setattr(obj, name, sliced_prof)
-    #     obj.grid = self.grid
-    #     return obj
-
-    def calc(self, point):
-        """
-        Interpolates the profile at the given point.
-        :param point: np.array point to be considered. len(point) = self.ndim
-        :return:
-        """
-
-        value = interp(self, self.grid, point, itype=self.interp, hierarchy=self.hierarchy)
-
-        return value
-
-    def collapse(self, coords):
-        """
-        Returns the profile corresponding to the selected coordinates. If all coordinates are specified returns the scalar value from calc.
-        :param coords:
-        :return:
-        """
-        pass
-
-    def smooth_prof(self, points):
-        """
-        Returns a smoothed profile, with spline interpolation. To be used mainly for showing purposes.
-        """
-        pass
+# class AtmProfile_ndarr(np.ndarray):
+#     """
+#     Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
+#     Contains a set of interp strings to determine the type of interpolation.
+#     Input:
+#         grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza) ..
+#         gridname -------> names for the dimensions of grid
+#         profile --------> profile : same dimensions as grid
+#         interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
+#         hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
+#     """
+#
+#     def __new__(cls, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
+#
+#         obj = np.asarray(profile).view(cls)
+#
+#         obj.descr = descr
+#         setattr(obj, profname, profile.copy())
+#
+#         _all_ = []
+#         _all_.append(profname)
+#         obj._all_ = _all_
+#
+#         if grid.ndim == 1:
+#             grid = np.array([grid])
+#             print('Transformed grid to a 1-dim grid array',np.shape(grid))
+#
+#         obj.grid = grid.copy()
+#
+#         if obj.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
+#
+#         if interp is not None:
+#             for ino in interp:
+#                 nam = ['lin','exp','box']
+#                 try:
+#                     nam.index(ino)
+#                 except ValueError:
+#                     raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
+#             obj.interp = np.array(interp)
+#         else:
+#             obj.interp = np.array(['lin']*obj.ndim)
+#             print('No interp found, interp set to default: {}'.format(obj.interp))
+#
+#         if gridname is not None:
+#             obj.gridname = np.array(gridname)
+#             for name,coord in zip(gridname,grid):
+#                 setattr(obj,name,np.sort(np.unique(coord)))
+#         else:
+#             obj.gridname = np.array(['']*obj.ndim)
+#             print('No gridname set. Enter names for the coordinate grid')
+#
+#         if hierarchy is not None:
+#             obj.hierarchy = np.array(hierarchy)
+#         else:
+#             obj.hierarchy = np.arange(obj.ndim)
+#             print('No hierarchy found, hierarchy set to default: {}'.format(obj.hierarchy))
+#         for val in np.unique(obj.hierarchy):
+#             oi = (obj.hierarchy == val)
+#             if len(np.unique(obj.interp[oi])) > 1:
+#                 raise ValueError('Can not interpolate 2D between int and exp coordinates!')
+#             elif np.unique(obj.interp[oi])[0] == 'exp':
+#                 raise ValueError('Can not interpolate 2D between exp coordinates!')
+#
+#         return obj
+#
+#     def __array_finalize__(self, obj):
+#         if obj is None: return
+#         self.descr = getattr(obj, 'descr', None)
+#         self.grid = getattr(obj, 'grid', None)
+#         self.prof = getattr(obj, 'prof', None)
+#         self._all_ = getattr(obj, '_all_', None)
+#         self.interp = getattr(obj, 'interp', None)
+#         self.hierarchy = getattr(obj, 'hierarchy', None)
+#         return
+#
+#     # def __getitem__(self, *args, **kwargs):
+#     #     for name in self._all_:
+#     #         profilo = getattr(self, name)
+#     #         sliced_prof = profilo.__getitem__(*args,**kwargs)
+#     #         setattr(obj, name, sliced_prof)
+#     #     np.ndarray.__getitem__(self.array_view, *args, **kwargs)
+#     #     return
+#     #
+#     # def __getslice__(self, *args, **kwargs):
+#     #     for name in self._all_:
+#     #         profilo = getattr(self, name)
+#     #         sliced_prof = profilo.__getslice__(*args,**kwargs)
+#     #         setattr(obj, name, sliced_prof)
+#     #     obj.grid = self.grid
+#     #     return obj
+#
+#     def calc(self, point):
+#         """
+#         Interpolates the profile at the given point.
+#         :param point: np.array point to be considered. len(point) = self.ndim
+#         :return:
+#         """
+#
+#         value = interp(self, self.grid, point, itype=self.interp, hierarchy=self.hierarchy)
+#
+#         return value
+#
+#     def collapse(self, coords):
+#         """
+#         Returns the profile corresponding to the selected coordinates. If all coordinates are specified returns the scalar value from calc.
+#         :param coords:
+#         :return:
+#         """
+#         pass
+#
+#     def smooth_prof(self, points):
+#         """
+#         Returns a smoothed profile, with spline interpolation. To be used mainly for showing purposes.
+#         """
+#         pass
 
 
 #### FINE AtmProfile class
@@ -1192,6 +1598,36 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     # Out[237]: array([ 80.,  80.,  90.,  90.])
     # In[245]: mgr[1,cond]
     # Out[238]: array([ 110.,  120.,  110.,  120.])
+
+
+def round2SignifFigs(vals,n):
+    """
+    CREDITS: dmon on StackExchange
+
+    (list, int) -> numpy array
+    (numpy array, int) -> numpy array
+
+    In: a list/array of values
+    Out: array of values rounded to n significant figures
+
+    Does not accept: inf, nan, complex
+
+    >>> m = [0.0, -1.2366e22, 1.2544444e-15, 0.001222]
+    >>> round2SignifFigs(m,2)
+    array([  0.00e+00,  -1.24e+22,   1.25e-15,   1.22e-03])
+    """
+
+    n = n-1
+
+    if np.all(np.isfinite(vals)) and np.all(np.isreal((vals))):
+        eset = np.seterr(all='ignore')
+        mags = 10.0**np.floor(np.log10(np.abs(vals)))  # omag's
+        vals = np.around(vals/mags,n)*mags             # round(val/omag)*omag
+        np.seterr(**eset)
+        vals[np.where(np.isnan(vals))] = 0.0           # 0.0 -> nan -> 0.0
+    else:
+        raise IOError('Input must be real and finite')
+    return vals
 
 
 def vibtemp_to_ratio(energy,vibtemp,temp):
@@ -1436,13 +1872,13 @@ def interpNd(arr,grid,point):
     """
 
 
-def trova_spip(file, hasha = '#', read_past = False):
+def trova_spip(ifile, hasha = '#', read_past = False):
     """
     Trova il '#' nei file .dat
     """
     gigi = 'a'
     while gigi != hasha :
-        linea = file.readline()
+        linea = ifile.readline()
         gigi = linea[0]
     else:
         if read_past:
@@ -1483,9 +1919,9 @@ def read_obs(filename):
     data_arr = np.array(data)
     freq = [float(r) for r in data_arr[:, 0]]
     obs = data_arr[:, 1:2*n_limb+2:2]
-    obs = obs.astype(np.float)
+    obs = obs.astype(float)
     flags = data_arr[:, 2:2*n_limb+2:2]
-    flags = flags.astype(np.int)
+    flags = flags.astype(int)
     infile.close()
     return n_freq, n_limb, dists, alts, freq, obs, flags
 
@@ -1556,7 +1992,7 @@ def write_obs(n_freq, n_limb, dists, alts, freq, obs, flags, filename, old_file 
     return
 
 
-def read_input_prof_gbb(filename, ptype, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4):
+def read_input_prof_gbb(filename, ptype, n_alt_max =None, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4):
     """
     Reads input profiles from gbb standard formatted files (in_temp.dat, in_pres.dat, in_vmr_prof.dat).
     Profile order is from surface to TOA.
@@ -1571,29 +2007,36 @@ def read_input_prof_gbb(filename, ptype, n_alt = 151, alt_step = 10.0, n_gas = 8
         print(ptype)
         trova_spip(infile)
         trova_spip(infile)
-        first = 1
+        proftot = []
+        mol_names = []
         for i in range(n_gas):
-            lin = infile.readline()
-            #print(lin)
-            num = lin.split()[0]
-            nome = lin.split()[1]
+            try:
+                lin = infile.readline()
+                print(lin)
+                num = lin.split()[0]
+                nome = lin.split()[1]
+            except:
+                break
             prof = []
             while len(prof) < n_alt:
                 line = infile.readline()
                 prof += list(map(float, line.split()))
             prof = np.array(prof[::-1])
-            if(first):
-                proftot = prof
-                first = 0
-            else:
-                proftot = np.vstack([proftot,prof])
+            if n_alt_max is not None and n_alt_max < n_alt:
+                prof = prof[:n_alt_max]
+            proftot.append(prof)
+            try:
+                mol_names.append(find_molec_metadata(i+1, 1)['mol_name'])
+            except:
+                mol_names.append(nome)
+
             for j in range(n_lat-1): # to skip other latitudes
                 prof = []
                 while len(prof) < n_alt:
                     line = infile.readline()
                     prof += list(map(float, line.split()))
-        proftot = np.array(proftot)
 
+        proftot = dict(zip(mol_names,proftot))
 
     if(ptype == 'temp' or ptype == 'pres'):
         print(ptype)
@@ -1604,11 +2047,13 @@ def read_input_prof_gbb(filename, ptype, n_alt = 151, alt_step = 10.0, n_gas = 8
             line = infile.readline()
             prof += list(map(float, line.split()))
         proftot = np.array(prof[::-1])
+        if n_alt_max is not None and n_alt_max < n_alt:
+            proftot = proftot[:n_alt_max]
 
     return proftot
 
 
-def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0, nlat = 4, descr = '', script=__file__):
+def write_input_prof_gbb(filename, prof, ptype, n_alt = 151, alt_step = 10.0, nlat = 4, descr = '', script=__file__):
     """
     Writes input profiles in gbb standard formatted files (in_temp.dat, in_pres.dat, in_vmr_prof.dat)
     Works both with normal vectors and with sbm.AtmProfile objects.
@@ -1627,13 +2072,13 @@ def write_input_prof_gbb(filename, prof, type, n_alt = 151, alt_step = 10.0, nla
 
     n_per_line = 8
 
-    if(type == 'vmr'):
+    if(ptype == 'vmr'):
         strin = '{:10.3e}'
         infile.write('VMR of molecules (ppmV)\n')
-    elif(type == 'temp'):
+    elif(ptype == 'temp'):
         strin = '{:10.5f}'
         infile.write('Temperature (K)\n')
-    elif(type == 'pres'):
+    elif(ptype == 'pres'):
         strin = '{:11.4e}'
         infile.write('Pressure (hPa)\n')
     else:
@@ -1735,6 +2180,97 @@ def extract_quanta_ch4(lev_string):
         simm = ''
 
     return [v1,v2,v3,v4], simm
+
+
+def extract_quanta_HITRAN(mol, iso, lev_string):
+    """
+    Extracts from string the vibrational quantum numbers and possibly simmetry/parity or other quantum numbers. Made on the HITRAN 2004-2012 format. Could change with future versions and with other databases.
+    """
+    groups = [[5,14,15,16,17,22,36]]
+    groups.append([7])
+    groups.append([8,13,18])
+    groups.append([4,19,23])
+    groups.append([2])
+    groups.append([1,3,9,10,21,31,33,37])
+    groups.append([26])
+    groups.append([11,28])
+    groups.append([20,25,29])
+    groups.append([6])
+    groups.append([24,27,12,30,32,35,38,39])
+
+    num = 0
+    for gru in groups:
+        num += 1
+        if mol in gru:
+            ok = True
+            break
+
+    if not ok:
+        raise ValueError('Molecule {} not found in the list!!'.format(mol))
+
+    if mol == 6 and iso == 3:
+        num = 11
+
+    others = None
+    vib_quanta = None
+
+    try:
+        if num == 1:
+            vib_quanta = [int(lev_string)]
+            minimal_string = lev_string.strip()
+        elif num == 2:
+            minimal_string = lev_string.strip()
+            vib_quanta = [int(lev_string[13:])]
+            electronic_level = lev_string[12]
+            others = dict()
+            others['electronic_level'] = electronic_level
+        elif num == 3:
+            minimal_string = lev_string.strip()
+            vib_quanta = [int(lev_string[13:])]
+            electronic_level = lev_string[7:11]
+            others = dict()
+            others['electronic_level'] = electronic_level
+        elif num == 4:
+            minimal_string = lev_string.strip()
+            vib_quanta = map(int,lev_string.split())
+        elif num == 5:
+            minimal_string = lev_string[:-1].strip()
+            vib_quanta = map(int,lev_string[:-1].split())
+            fermi_res = lev_string[-1]
+            others = dict()
+            others['fermi_res'] = fermi_res
+        elif num == 6:
+            minimal_string = lev_string.strip()
+            vib_quanta = map(int,lev_string.split())
+        elif num == 7:
+            minimal_string = lev_string[:12].strip()
+            vib_quanta = map(int,lev_string[:12].split())
+            others = dict()
+            others['parity'] = lev_string[12]
+            others['fermi_res'] = lev_string[13]
+            others['S-field parity'] = lev_string[-1]
+        elif num == 8:
+            minimal_string = lev_string[:13].strip()
+            vib_quanta = map(int,lev_string[:13].split())
+            others = dict()
+            others['simmetry'] = lev_string[13:]
+        elif num == 9:
+            minimal_string = lev_string.strip()
+            vib_quanta = map(int,lev_string.split())
+        elif num == 10:
+            minimal_string = lev_string[:11].strip()
+            vib_quanta = map(int,lev_string[:11].split())
+            others = dict()
+            others['simmetry'] = lev_string[11:]
+        elif num == 11:
+            minimal_string = lev_string.strip()
+    except Exception as cazzillo:
+        print('Exception found... for level string {}'.format(lev_string))
+        print(cazzillo)
+        return '', None, None
+
+    return minimal_string, vib_quanta, others
+
 
 def hitran_formatter(quanta,simmetry = '', molec = 'CH4'):
 
@@ -1872,13 +2408,16 @@ def write_tvib_gbb(filename, molecs, atmosphere, grid = None, l_ratio = True, n_
                 print(lev)
                 _lev_ = getattr(_iso_, lev)
                 print(type(_lev_))
+                if len(_lev_.simmetry) == 0:
+                    print('Skipping level '+lev)
+                    continue
+                if len(_lev_.simmetry[0]) != 15:
+                    errstring = 'Length of level string is {} instead of 15 for level {} of molecule {}, stopping....'.format(len(_lev_.lev_string),lev,iso)
+                    raise ValueError(errstring)
                 infile.write('Hitran Code of level, internal code of level, number of simmetries, multiplier(depr.), Level Energy:\n')
                 infile.write('{:1s}\n'.format('#'))
                 print(_lev_.simmetry)
                 infile.write('{:15.15s}{:5d}{:5d}{:20.3f}{:12.4f}\n'.format(_lev_.simmetry[0],ioo,len(_lev_.simmetry)-1,1.0,_lev_.energy))
-                if len(_lev_.lev_string) != 15:
-                    errstring = 'Length of level string is {} instead of 15 for level {} of molecule {}.'.format(len(_lev_.lev_string),lev,iso)
-                    raise ValueError(errstring)
 
                 for simm in _lev_.simmetry[1:]:
                     infile.write('{:15s}\n'.format(simm))
@@ -1951,15 +2490,18 @@ def read_input_atm_man(filename):
     return alts, temp, pres
 
 
-def read_tvib_manuel(filename):
+def read_tvib_manuel(filename, n_alt_max = None):
     """
     Reads input atmosphere in manuel standard.
     :param filename:
     :return:
     """
+
     infile = open(filename,'r')
     trova_spip(infile,hasha='$')
     n_alt = int(infile.readline())
+    if n_alt_max is not None and n_alt > n_alt_max:
+        n_alt = n_alt_max
     trova_spip(infile,hasha='$')
     prof = []
     while len(prof) < n_alt:
@@ -1983,7 +2525,7 @@ def read_tvib_manuel(filename):
     vibtemps = []
     for i in range(n_lev):
         linea = trova_spip(infile,hasha = '$',read_past = True)
-        levels.append(linea[0:15])
+        levels.append(linea[0:15].strip())
         energies.append(float(linea[15:]))
         molecs.append(infile.readline().rstrip())
         infile.readline()
