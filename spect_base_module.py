@@ -15,6 +15,12 @@ import copy
 import pickle
 import time
 import spect_main_module as smm
+import spect_classes as spcl
+import operator
+import psutil
+
+import Tkinter
+import tkMessageBox
 
 #parameters
 Rtit = 2575.0 # km
@@ -23,6 +29,17 @@ kb = 1.38065e-19 # boltzmann constant to use with P in hPa, n in cm-3, T in K (1
 c_R = 8.31446 # J K-1 mol-1
 c_G = 6.67408e-11 # m3 kg-1 s-2
 kbc = const.k/(const.h*100*const.c) # 0.69503
+
+def check_free_space(cart, threshold = 0.05):
+    fract = (1.0*os.statvfs(cart).f_bfree)/os.statvfs(cart).f_blocks
+    print('Still {}% of disk space free'.format(int(fract*100.)))
+    if fract < threshold:
+        tkMessageBox.showwarning(title = 'aaaaaaaaaaaaahhhhhh', message = "Available disk space is below {}%. Free some space or kill process.".format(int(threshold*100)))
+        #top = Tkinter.Tk(title = 'ATTENTION!!!', message = "Available disk space is below {}%. Free some space or kill process.".format(int(threshold*100)))
+        #B1 = Tkinter.Button(top, text = 'Go!')
+        #B1.pack()
+        #top.mainloop()
+    return fract
 
 
 #####################################################################################################################
@@ -72,6 +89,20 @@ class Coords(object):
             return self.coords
         elif self.s_ref == 'Spherical':
             return sphtocart(self.coords, R=self.R)
+
+    def distance(self, other, units = 'cm'):
+        """
+        Points are stored in km. units is the units of the output, usually cm to be used in radtran.
+        """
+        su = 0.0
+        for un,du in zip(self.Cartesian(), other.Cartesian()):
+            su += (un-du)**2
+        if units == 'cm':
+            return mt.sqrt(su)*1.e5
+        elif units == 'km':
+            return mt.sqrt(su)
+        else:
+            raise ValueError('Unknown unit')
 
 
 class LineOfSight(object):
@@ -134,13 +165,15 @@ class LineOfSight(object):
 
         quant = []
 
-        for point1,point2 in zip(points[:-1],points[1:]):
-            point = Coords((point1.Cartesian()+point2.Cartesian())/2)
+        # for point1,point2 in zip(points[:-1],points[1:]):
+        #     point = Coords((point1.Cartesian()+point2.Cartesian())/2)
+        #     quant.append(atmosphere.calc(point.Spherical()[2],profname))
+        #     if curgod:
+        #         print('Not yet available! Doing simple interpolation..')
+        for point in points:
             quant.append(atmosphere.calc(point.Spherical()[2],profname))
-            if curgod:
-                print('Not yet available! Doing simple interpolation..')
 
-        print('PUPPAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+        #print('PUPPAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ---- questo va riscrittooooooooooooo osososooso sooooo: non è generalizzato per profilo a più dimensioni tipo lat lon alt')
         if set_attr:
             if set_attr_name is None:
                 set_attr_name = profname
@@ -164,7 +197,7 @@ class LineOfSight(object):
         return np.array(szas)
 
 
-    def calc_atm_intersections(self, planet, delta_x = 5.0, start_from_TOA = True, extinction_coeff = None, refraction = False, adaptive_step = False):
+    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, extinction_coeff = None, refraction = False, adaptive_step = False):
         """
         Calculates the coordinates of the points that the LOS crosses in the atmosphere. If extinction_coeff is set, the coordinate along the LOS is tau, the optical depth, instead it is just the distance in km. If start_from_TOA is True, the LOS path starts at the first intersection with the atmosphere.
 
@@ -181,12 +214,12 @@ class LineOfSight(object):
         R = planet.radius
 
         if start_from_TOA:
-            print('Qui')
-            print(self.starting_point.Cartesian())
+            #print('Qui')
+            #print(self.starting_point.Cartesian())
             point_0, i_type = self.intersect_shell(planet, self.starting_point.Cartesian(), TOA_R)
             if i_type != 'Ingress':
                 raise ValueError('No intersection with shell!')
-            print('Quo')
+            #print('Quo')
         else:
             point_0 = copy.deepcopy(self.starting_point.Cartesian())
 
@@ -219,7 +252,7 @@ class LineOfSight(object):
                 pass
             point = self.move_along_LOS(planet, point, delta_x, refraction = refraction)
             inside = (LA.norm(point) < TOA_R)
-            print(inside, point)
+            #print(inside, point)
             surface_hit = (LA.norm(point) < R)
             if surface_hit:
                 point = self.move_along_LOS(planet, point, delta_x, refraction = refraction, backward = True)
@@ -240,17 +273,188 @@ class LineOfSight(object):
 
         return los_points
 
+
+    def calc_radtran_steps(self, planet, lines, max_opt_depth = 1.0, max_T_variation = 5.0, max_Plog_variation = 0.2):
+        """
+        Calculates the optimal step for radtran calculation.
+        """
+
+        try:
+            gigi = self.intersections
+            gigi = self.temp
+            gigi = self.pres
+            for gas in planet.gases:
+                gigi = self.gas
+        except:
+            self.calc_atm_intersections(planet)
+            self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
+            self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
+
+        tvibs = []
+        for gas in planet.gases:
+            conc_gas = self.calc_abundance(planet, gas, set_attr = True)
+
+            gasso = planet.gases[gas]
+            for iso in gasso.all_iso:
+                isomol = getattr(gasso, iso)
+                if not isomol.is_in_LTE:
+                    for lev in isomol.levels:
+                        levello = getattr(isomol, lev)
+                        tvi = self.calc_along_LOS(levello.vibtemp)
+                        tvibs.append(tvi)
+
+        # Calcolo shape e value della linea più intensa a diverse temps.
+        min_temp = np.min(self.atm_quantities['temp'])
+        max_temp = np.max(self.atm_quantities['temp'])
+
+
+        abs_max = dict()
+        for mol_name, molec in zip(planet.gases.keys(), planet.gases.values()):
+            lines_mol = [lin for lin in lines if lin.Mol == molec.mol]
+
+            if len(lines_mol) == 0:
+                abs_max[mol_name] = 0.0
+                continue
+
+            if len(lines_mol) > 50:
+                essesss = [lin.Strength for lin in lines_mol]
+                essort = np.sort(np.array(essesss))[-50]
+                lines_sel = [lin for lin in lines_mol if lin.Strength >= essort]
+            else:
+                lines_sel = lines_mol
+
+            essesss = [lin.CalcStrength_from_Einstein(max_temp)[0] for lin in lines_sel]
+            # Estimating maximum height of the line peak
+            lin = lines_sel[0]
+            shape = lin.MakeShapeLine(min_temp, 1.e-8)
+            peak_val = np.max(shape.spectrum)
+            abs_max[mol_name] = peak_val*max(essesss)
+
+        # adesso parto con gli step
+        opt_depth_step = 0.0
+        step = 0.0
+        num_orig = 0
+        point_prev = self.intersections[0]
+        point_orig = self.intersections[0]
+
+        self.radtran_steps = dict()
+        self.radtran_steps['step'] = []
+        self.radtran_steps['max_opt_depth'] = []
+        self.radtran_steps['indices'] = []
+        self.radtran_steps['temp'] = dict()
+        self.radtran_steps['pres'] = dict()
+        self.radtran_steps['n_dens'] = dict()
+        for gas in planet.gases:
+            self.radtran_steps['n_dens'][gas] = []
+            self.radtran_steps['temp'][gas] = []
+            self.radtran_steps['pres'][gas] = []
+
+        end_LOS = False
+        num = 0
+
+        stp_tot = 0.0
+        estim_tot_depth = 0.0
+
+        while not end_LOS:
+            num += 1
+            point_prev = self.intersections[num-1]
+            point = self.intersections[num]
+
+            step_add = point_prev.distance(point, units = 'cm')
+            step += step_add
+            abstop = max([abs_max[gas]*self.atm_quantities[gas][num] for gas in planet.gases])
+            opt_depth_step += abstop*step_add
+            #print(num, step, opt_depth_step)
+
+            t_var = max(self.atm_quantities['temp'][num_orig:num])-min(self.atm_quantities['temp'][num_orig:num])
+            p_var_log = np.log(max(self.atm_quantities['pres'][num_orig:num])/min(self.atm_quantities['pres'][num_orig:num]))
+            tvibs_var = []
+            for tt in tvibs:
+                tvibs_var.append(max(tt[num_orig:num])-min(tt[num_orig:num]))
+            tvibs_var = np.array(tvibs_var)
+
+            stepping = False
+
+            cond = np.array([False, False, False, False])
+            if t_var > max_T_variation: cond[0] = True
+            if p_var_log > max_Plog_variation: cond[1] = True
+            if np.any(tvibs_var > max_T_variation): cond[2] = True
+            if opt_depth_step > max_opt_depth: cond[3] = True
+
+            # Check T,P,Tvib variation
+            # Check optical_depth
+            if np.any(cond):
+                print(num, opt_depth_step, max_opt_depth, step)
+                num -= 1
+                point = point_prev
+                step -= step_add
+                opt_depth_step -= abstop*step_add
+                stepping = True
+
+            if num == len(self.intersections)-1:
+                print('yogaaaaaaaaaaa')
+                stepping = True
+                end_LOS = True
+
+            if num == num_orig:
+                raise ValueError('RadStep is thick with 1 step! raise the max_opt_depth threshold or lower the LOS step length..')
+
+            if stepping:
+                print('stepping {:5d} <-> {:5d} of {:5d}. z0: {:8.3f} zf: {:8.3f}. Op_d: {:8.3f}. Trig: {}. E stocazzo.. {}'.format(num_orig, num, len(self.intersections), point_orig.Spherical()[2], point.Spherical()[2], opt_depth_step, np.argwhere(cond == True), peak_val))
+
+                estim_tot_depth += opt_depth_step
+                stp_tot += step
+
+                self.radtran_steps['step'].append(step)
+                self.radtran_steps['max_opt_depth'].append(opt_depth_step)
+                self.radtran_steps['indices'].append([num_orig, num])
+                for gas in planet.gases:
+                    nd,ti = CurGod(self.atm_quantities[gas][num_orig:num+1],self.atm_quantities['temp'][num_orig:num+1])
+                    nd,pi = CurGod(self.atm_quantities[gas][num_orig:num+1],self.atm_quantities['pres'][num_orig:num+1])
+                    self.radtran_steps['n_dens'][gas].append(nd)
+                    self.radtran_steps['pres'][gas].append(pi)
+                    self.radtran_steps['temp'][gas].append(ti)
+                    print('caiaioooo')
+                    print(pi,ti,nd)
+                    # non-LTE part
+                    gasso = planet.gases[gas]
+                    for iso in gasso.all_iso:
+                        isomol = getattr(gasso, iso)
+                        if not isomol.is_in_LTE:
+                            for lev in isomol.levels:
+                                levello = getattr(isomol, lev)
+                                tvi = self.calc_along_LOS(levello.vibtemp)
+                                nd,tvi = CurGod(self.atm_quantities[gas][num_orig:num+1],tvi[num_orig:num+1])
+                                try:
+                                    levello.local_vibtemp.append(tvi)
+                                except:
+                                    levello.add_local_vibtemp(tvi)
+                                print(gas,iso,lev,levello.energy,tvi)
+                                print(vibtemp_to_ratio(levello.energy, tvi, ti))
+
+                num_orig = num
+                point_orig = self.intersections[num]
+                step = 0.0
+                opt_depth_step = 0.0
+
+        print('Estimated total optical depth: {}'.format(estim_tot_depth))
+        print('total length of LOS: {}'.format(stp_tot))
+
+        return
+
+
     def calc_abundance(self, planet, gas, set_attr = False):
         """
-        Calculates abundance (num density) of the gas among planet.gases along the LOS.
+        Calculates abundance (num density) of the gas among planet.gases along the LOS. vmr in absolute fraction!
         """
         vmr_gas = self.calc_along_LOS(planet.gases[gas].abundance)
 
         n_dens = []
         #print('puppa')
         #print(self.atm_quantities)
-        for P, T, vmr in zip(self.atm_quantities['temp'], self.atm_quantities['pres'], vmr_gas):
-            n_dens.append(num_density(P, T, vmr))
+        for P, T, vmr in zip(self.atm_quantities['pres'], self.atm_quantities['temp'], vmr_gas):
+            nd = num_density(P, T, vmr)
+            n_dens.append(nd)
 
         if set_attr:
             self.atm_quantities[gas] = np.array(n_dens)
@@ -291,7 +495,7 @@ class LineOfSight(object):
                 set_emi = []
 
                 print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs)
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs, store_in_memory = True)
                 iso_ab = isomol.ratio
                 for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, n_dens):
                     print(aboo,emoo,ndoo,iso_ab)
@@ -317,63 +521,207 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, step = None, cartLUTs = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None):
         """
-        Calculates the optical depth along the LOS.
+        Calculates the radtran along the LOS. step in km.
         """
 
-        abs_opt_depth = smm.prepare_spe_grid(wn_range)
-        emi_opt_depth = smm.prepare_spe_grid(wn_range)
+        if tagLOS is None:
+            tagLOS = 'LOS'
 
-        single_coeffs_abs = dict()
-        single_coeffs_emi = dict()
+        if cartDROP is None:
+            cartDROP = 'stuff_'+smm.date_stamp()
+            if not os.path.exists(cartDROP):
+                os.mkdir(cartDROP)
+            cartDROP += '/'
+
+        try:
+            gigi = self.radtran_steps['step']
+        except:
+            self.calc_radtran_steps(planet, lines)
+
+        spe_zero = smm.prepare_spe_grid(wn_range)
+
+        if initial_intensity is None:
+            intensity = spcl.SpectralIntensity(spe_zero.spectrum, spe_zero.spectral_grid)
+        else:
+            intensity = copy.deepcopy(initial_intensity)
+
+        all_molecs_abs = dict()
+        all_molecs_emi = dict()
+
+        # CALCULATING SINGLE GAS-iso ABS and emi
 
         for gas in planet.gases:
-            print(gas)
             gasso = planet.gases[gas]
-            n_dens = self.calc_abundance(planet, gas)
-            print('aaaaaaaaaaaaaaaaaargh ', n_dens)
-            iso_abs = []
-            iso_emi = []
+
+            temps = self.radtran_steps['temp'][gas]
+            press = self.radtran_steps['pres'][gas]
+
+            all_iso_abs = dict()
+            all_iso_emi = dict()
             print(gasso.all_iso)
             for iso in gasso.all_iso:
+                check_free_space(cartDROP)
                 isomol = getattr(gasso, iso)
+                if len([lin for lin in lines if lin.Mol == isomol.mol and lin.Iso == isomol.iso]) == 0:
+                    print('Skippin gas {} {}, no lines found'.format(gas, iso))
+                    continue
                 print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
-                if not isomol.is_in_LTE:
-                    for lev in isomol.levels:
-                        #print(lev)
-                        levello = getattr(isomol, lev)
-                        tvi = self.calc_along_LOS(levello.vibtemp)
-                        levello.add_local_vibtemp(tvi)
-
-                set_abs = []
-                set_emi = []
-
                 print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs)
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS)
+
+                all_iso_abs[iso] = copy.deepcopy(abs_coeffs)
+                all_iso_emi[iso] = copy.deepcopy(emi_coeffs)
+
+            all_molecs_abs[gas] = all_iso_abs
+            all_molecs_emi[gas] = all_iso_emi
+
+        # CALCULATING TOTAL ABS AND emi
+
+        abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+tagLOS+'.pic')
+        emi_coeff_tot = smm.AbsSetLOS(cartDROP+'emicoeff_tot_'+tagLOS+'.pic')
+        abs_coeff_tot.prepare_export()
+        emi_coeff_tot.prepare_export()
+
+        for num in range(len(self.radtran_steps['step'])):
+            abs_coeff = smm.prepare_spe_grid(wn_range)
+            emi_coeff = smm.prepare_spe_grid(wn_range)
+            for gas in all_molecs_abs.keys():
+                nd = self.radtran_steps['n_dens'][gas][num]
+                gasso = planet.gases[gas]
+                for iso in all_molecs_abs[gas].keys():
+                    check_free_space(cartDROP)
+                    isomol = getattr(gasso, iso)
+                    gigio_ab = all_molecs_abs[gas][iso]
+                    gigio_em = all_molecs_emi[gas][iso]
+                    if gigio_ab.temp_file is None:
+                        gigio_ab.prepare_read()
+                        gigio_em.prepare_read()
+                    ab = gigio_ab.read_one()
+                    em = gigio_em.read_one()
+                    iso_ab = isomol.ratio
+
+                    abs_coeff += ab * (nd*iso_ab)
+                    emi_coeff += em * (nd*iso_ab)
+
+            abs_coeff_tot.add_dump(abs_coeff)
+            emi_coeff_tot.add_dump(emi_coeff)
+
+        for gas in all_molecs_abs.keys():
+            for iso in all_molecs_abs[gas].keys():
+                all_molecs_abs[gas][iso].finalize_IO()
+                all_molecs_emi[gas][iso].finalize_IO()
+
+        abs_coeff_tot.finalize_IO()
+        emi_coeff_tot.finalize_IO()
+
+        steps = self.radtran_steps['step']
+        single_intensities = dict()
+        iso_intensities = dict()
+
+        for gas in all_molecs_abs.keys():
+            print('catuuuuusppspsps: ', gas)
+            all_iso_emi = all_molecs_emi[gas]
+            for iso in all_molecs_abs[gas].keys():
+                print('catuuuuusppspsps: ', iso)
+                emi_coeffs = all_iso_emi[iso]
+                isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, n_dens):
-                    print(aboo,emoo,ndoo,iso_ab)
-                    abs_coeff_tot = smm.prepare_spe_grid(wn_range)
-                    emi_coeff_tot = smm.prepare_spe_grid(wn_range)
-                    abs_coeff_tot.add_to_spectrum(aboo, Strength = iso_ab*ndoo)
-                    emi_coeff_tot.add_to_spectrum(emoo, Strength = iso_ab*ndoo)
-                    set_abs.append(abs_coeff_tot)
-                    set_emi.append(emi_coeff_tot)
+                ndens = iso_ab*np.array(self.radtran_steps['n_dens'][gas])
+                coso = self.radtran_single(intensity, abs_coeff_tot, emi_coeffs, steps, ndens)
 
-                iso_abs.append(set_abs)
-                iso_emi.append(set_emi)
-            single_coeffs_abs[gas] = copy.deepcopy(iso_abs)
-            single_coeffs_emi[gas] = copy.deepcopy(iso_emi)
+                if calc_derivatives:
+                    der_coso = self.calc_single_der(derivatives)
 
-        steps = [step]*len(single_coeffs_abs)
-        for gas in planet.gases:
-            for isoco in single_coeffs_abs[gas]:
-                self.spectralsum_along_LOS(abs_opt_depth, isoco, strengths = steps)
-            for isoco in single_coeffs_emi[gas]:
-                self.spectralsum_along_LOS(emi_opt_depth, isoco, strengths = steps)
+                iso_intensities[iso] = copy.deepcopy(coso)
+            single_intensities[gas] = copy.deepcopy(iso_intensities)
 
-        return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
+        for gas in all_molecs_abs.keys():
+            for iso in all_molecs_abs[gas].keys():
+                intensity += single_intensities[gas][iso]
+
+        return intensity, single_intensities
+
+
+    def radtran_single(self, intensity, abs_coeffs, emi_coeffs, steps, ndens):
+        Ones = spcl.SpectralObject(np.ones(len(intensity.spectrum), dtype = float), intensity.spectral_grid)
+        Gama_tot = copy.deepcopy(Ones)
+        izero = copy.deepcopy(intensity)
+
+        time0 = time.time()
+        ii = 0
+        # Summing step by step the contribution of the local Source function
+        abs_coeffs.prepare_read()
+        emi_coeffs.prepare_read()
+
+        print('TOTAL STEPS: {}'.format(abs_coeffs.counter))
+
+        ii = 0
+        for step, nd in zip(steps, ndens):
+            print(step,nd)
+            ii += 1
+            ab = abs_coeffs.read_one()
+            em = emi_coeffs.read_one()
+            print('{} steps remaining'.format(abs_coeffs.remaining))
+
+            max_depth = np.max(ab.spectrum)*step
+            if(max_depth > 1.):
+                print('Step {} is not optically thin. Max optical depth: {}'.format(ii, max_depth))
+            time1 = time.time()
+
+            tau = ab*step
+            tau_exp = tau.exp_elementwise(exp_factor = -1.0)
+            Source = (em*nd)/ab
+            Source.spectrum[np.isnan(Source.spectrum)] = 0.0
+            Source.spectrum[np.isinf(Source.spectrum)] = 0.0
+            print('Questo è brutto! Cambia mettendo la source alla temp sua, vabbè è bruttino uguale eh..')
+
+            UNOMENOTAUEXP = tau_exp*(-1.0)+1.0
+            intensity += UNOMENOTAUEXP*Source*Gama_tot
+
+            Gama_tot *= tau_exp
+
+            ok = (intensity.spectral_grid.grid > 2115.6286) & (intensity.spectral_grid.grid < 2115.6294)
+            #print(type(ii), type(step), type(nd), type(intensity.spectrum[ok]),  type(ab.spectrum[ok]), type(em.spectrum[ok]), type(tau.spectrum[ok]), type(tau_exp.spectrum[ok]), type(Gama_tot.spectrum[ok]), type(Source.spectrum[ok]))
+            print(('{:4d} '+9*'{:12.3e}' ).format(ii, step, nd, intensity.spectrum[ok][0],  ab.spectrum[ok][0], em.spectrum[ok][0], tau.spectrum[ok][0], tau_exp.spectrum[ok][0], Gama_tot.spectrum[ok][0], Source.spectrum[ok][0]))
+
+            # pl.figure(41)
+            # intensity.plot(label = 'Step {}'.format(ii))
+            # pl.grid()
+            #
+            # pl.figure(43)
+            # Source.plot(label = 'Step {}'.format(ii))
+            # pl.grid()
+            #
+            # pl.figure(44)
+            # tau.plot(label = 'Step {}'.format(ii))
+            # pl.grid()
+
+
+            # coso = copy.deepcopy(Ones)
+            # Gama = copy.deepcopy(Ones)
+            # Gama.add_to_spectrum(ab, Strength = -1.0*st*nd)
+            # Gama_tot.multiply_elementwise(Gama)
+            # Source = em.divide_elementwise(ab, save = False)
+            # Source.spectrum[np.isnan(Source.spectrum)] = 0.0
+            # Source.spectrum[np.isinf(Source.spectrum)] = 0.0
+            # print('Questo è brutto! Cambia mettendo la source alla temp sua')
+            #
+            # coso.add_to_spectrum(Gama, Strength = -1.0)
+            # coso.multiply_elementwise(Source)
+            # coso.multiply_elementwise(Gama_tot)
+            #
+            # intensity.add_to_spectrum(coso)
+            print('Giro {} finito in {} sec'.format(ii, time.time()-time1))
+
+        # summing the original intensity absorbed by the atmosphere
+        print(type(izero), type(Gama_tot))
+        intensity += izero*Gama_tot
+
+        print('Finito radtran in {} s'.format(time.time()-time0))
+
+        return intensity
 
 
     def spectralsum_along_LOS(self, abs_coeff, single_coeffs, strengths = None):
@@ -384,7 +732,6 @@ class LineOfSight(object):
             abs_coeff.add_to_spectrum(coef, Strength = theforce)
 
         return abs_coeff
-
 
 
     def intersect_shell(self, planet, point, shell_radius, thres = 0.1, refraction = False):
@@ -483,6 +830,32 @@ def num_density(P, T, vmr):
     n = vmr*P/(kb*T) # num. density in cm-3
 
     return n
+
+
+def CurGod(n_dens, quant, interp = 'lin', extension_factor = 10):
+    """
+    Curtis-Godson weighted average of atmospheric quantities. lin is linear interpolation, exp is exponential.
+    """
+    n = len(n_dens)
+    x = np.linspace(0.,1.,n)
+
+    x_extended = np.linspace(0., 1.0, extension_factor*n)
+    n_dens_extended = np.interp(x_extended, x, np.log(n_dens))
+    n_dens_extended = np.exp(n_dens_extended)
+
+    if interp == 'lin':
+        quant_extended = np.interp(x_extended, x, quant)
+    elif interp == 'exp':
+        quant_extended = np.interp(x_extended, x, np.log(quant))
+        quant_extended = np.exp(quant_extended)
+    else:
+        raise ValueError('interp type not valid')
+
+    CG_nd = np.sum(n_dens_extended)
+    CG_quant = np.sum(quant_extended*n_dens_extended)/CG_nd
+    CG_nd = CG_nd/len(n_dens_extended)
+
+    return CG_nd, CG_quant
 
 
 def normalize(vector):
@@ -611,7 +984,7 @@ class Planet(object):
 
 class Titan(Planet):
     def __init__(self):
-        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1200., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
+        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1000., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
 
         return
 
@@ -687,6 +1060,25 @@ class Pixel(object):
 
         return intt
 
+    def spacecraft(self):
+        point = Coords([self.sub_obs_lat, self.sub_obs_lon, self.dist],s_ref='Spherical')
+        print(point.Spherical())
+        return point
+
+    def limb_tg_point(self):
+        point = Coords([self.limb_tg_lat, self.limb_tg_lon, self.limb_tg_alt],s_ref='Spherical')
+        print(point.Spherical())
+        return point
+
+    def LOS(self, verbose = False):
+        spacecraft = self.spacecraft()
+        second = self.limb_tg_point()
+
+        linea1 = LineOfSight(spacecraft, second)
+        if verbose:
+            linea1.details()
+
+        return linea1
 
 
 class PixelSet(np.ndarray):
@@ -742,7 +1134,7 @@ class Molec(object):
         self.all_iso = []
         return
 
-    def add_all_iso_from_HITRAN(self, lines = None, add_levels = True, custom_iso_ratios = None):
+    def add_all_iso_from_HITRAN(self, lines = None, add_levels = True, custom_iso_ratios = None, n_max = None):
         """
         Creates and adds to Molec all isotopologues in HITRAN. The ones already added manually remain there. custom_iso_ratios is intended from the first isotopologue to be added.
         """
@@ -752,16 +1144,21 @@ class Molec(object):
         iso_names, iso_MM, iso_ratios = find_all_iso_HITRAN(self.mol)
 
         cos = len(self.all_iso)
-        iso_names = iso_names[cos:]
-        iso_MM = iso_MM[cos:]
-        iso_ratios = iso_ratios[cos:]
+        if n_max is None:
+            iso_names = iso_names[cos:]
+            iso_MM = iso_MM[cos:]
+            iso_ratios = iso_ratios[cos:]
+        else:
+            iso_names = iso_names[cos:n_max]
+            iso_MM = iso_MM[cos:n_max]
+            iso_ratios = iso_ratios[cos:n_max]
 
         if custom_iso_ratios is not None:
             ok = len(custom_iso_ratios)
             iso_ratios = custom_iso_ratios + iso_ratios[ok:]
 
         num = cos + 1
-        for ratio in zip(iso_ratios):
+        for ratio in iso_ratios:
             self.add_iso(num, ratio = ratio)
             num += 1
 
@@ -777,7 +1174,7 @@ class Molec(object):
         Defines a climatology for the molecule. profile is the molecular abundance, has to be an AtmProfile object. type can be either 'VMR' or 'num_density (cm-3)'
         """
         if type(profile) is not AtmProfile:
-            raise ValueError('Profile is not an AtmProfile object. Create it via Prof_ok = AtmProfile(profile, grid).')
+            raise ValueError('Profile is not an AtmProfile object. Create it via Prof_ok = AtmProfile(profname, profile, grid, interp).')
         self.abundance = copy.deepcopy(profile)
         print('Added climatology for molecule {}'.format(self.name))
 
@@ -903,6 +1300,9 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
     Loads molecular metadata from the molparam.txt HITRAN file. Returns a dict with: mol. name, iso. name, iso. ratio, iso. MM
     """
 
+    if mol > 47:
+        raise ValueError('There are only 47 molecs here.')
+
     print('Looking for mol {}, iso {}'.format(mol,iso))
     resu = dict()
 
@@ -915,7 +1315,7 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
 
     linea_ok = infile.readline().split()
     if linea_ok[0] == '#':
-            return None
+        raise ValueError('Iso not found.. you sure?')
 
     print(linea_ok)
     resu['iso_name'] = linea_ok[0]
@@ -981,7 +1381,6 @@ class IsoMolec(object):
         if vibtemps is None:
             vibtemps = len(lev_strings)*[None]
         else:
-            self.is_in_LTE = False
             for vit in vibtemps:
                 print(type(vit))
 
@@ -989,7 +1388,6 @@ class IsoMolec(object):
 
         if add_fundamental:
             minstr = extract_quanta_HITRAN(self.mol, self.iso, lev_strings[0])[0]
-            print('stocazzzoooooo '+minstr, lev_strings[0])
             lev_0 = ''
             for lett in minstr:
                 try:
@@ -997,14 +1395,12 @@ class IsoMolec(object):
                     lev_0 += '0'
                 except:
                     lev_0 += lett
-            print('stocazzzooooooo '+lev_0)
 
             energies.insert(0,0.0)
             lev_strings.insert(0, lev_0)
             simmetries.insert(0, None)
             degeneracies.insert(0, None)
             if vibtemps[0] is not None:
-                T_kin = AtmProfile(T_kin, vibtemps[0].grid)
                 vibtemps.insert(0, T_kin)
             else:
                 vibtemps.insert(0, None)
@@ -1023,8 +1419,6 @@ class IsoMolec(object):
             print(stringaa)
             setattr(self,stringaa,copy.deepcopy(lev))
             print(type(getattr(self,stringaa)))
-
-
 
             self.n_lev += 1
 
@@ -1139,6 +1533,7 @@ class Level(object):
         minst, vibq, oth = extract_quanta_HITRAN(self.mol, self.iso, self.simmetry[0])
         minst2, vibq2, oth2 = extract_quanta_HITRAN(self.mol, self.iso, string_lev)
 
+        equiv = False
         if minst == minst2:
             equiv = True
 
@@ -1186,147 +1581,325 @@ class CosaScema(np.ndarray):
         return
 
 
-class AtmProfile(object):
+class AtmGrid(object):
     """
-    Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
-    Contains a set of interp strings to determine the type of interpolation.
-    Input:
-        grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza). The dimension of the mgrid object is the grid dimension + 1.
-        gridname -------> names for the dimensions of grid
-        profile --------> profile : dim of grid - 1
-        profname ----------> name of the profile (es. 'temp', 'pres', ..)
-        interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
-        hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
-
-    Attributes: names (list of profiles names -> list of strings), [nam for nam in names] (all profiles -> ndarrays), grid (the grid -> np.mgrid), gridname (names of the grid coords -> list of strings), interp (list of interp lists, one per profile), hierarchy (list od hierarchies, one per profile), descr
+    The atmospheric grid. It is useful to separate it from AtmProfile, so one can have the control of the grid without getting lost in the np.meshgrid.
+    : coord_names : list of names of the different dimensions.
+    : coord_points_list : list of coordinate point lists, one for each dimension
+    : coord_units : optional, list of units
     """
+    def __init__(self, coord_names, coord_points_list, coord_units = None, hierarchy = None):
+        self.ndim = len(coord_names)
+        self.coords = dict()
+        self.internal_order = dict()
+        self.units = dict()
+        if type(coord_names) is not list:
+            coord_names = list(coord_names)
+            coord_points_list = list(coord_points_list)
+            if coord_units is not None:
+                coord_units = list(coord_units)
 
-    def __init__(self, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
+        ii = 0
+        for nam, coord in zip(coord_names, coord_points_list):
+            self.coords[nam] = copy.deepcopy(np.array(coord))
+            self.internal_order[nam] = ii
+            ii += 1
 
-        profile = np.array(profile)
-        grid = np.array(grid)
-        self.descr = descr
-        setattr(self, profname, profile.copy())
-        self.ndim = profile.ndim
+        if coord_units is None:
+            coord_units = [None]*len(coord_names)
+        for nam, unit in zip(coord_names, coord_units):
+            self.units[nam] = unit
 
-        profnames = []
-        profnames.append(profname)
-        self.names = profnames
-
-        if grid.ndim == 1:
-            grid = np.array([grid])
-            print('Transformed grid to a 1-dim grid array',np.shape(grid))
-
-        self.grid = grid.copy()
-        self.interp = []
-        self.hierarchy = []
-
-        if self.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
-
-        if gridname is not None:
-            self.gridname = np.array(gridname)
-            for name,coord in zip(gridname,grid):
-                setattr(self,name,np.sort(np.unique(coord)))
+        if len(coord_names) == 1:
+            self.grid = np.array([coord_points_list])
         else:
-            self.gridname = np.array(['']*self.ndim)
-            print('No gridname set. Enter names for the coordinate grid')
+            cos = np.meshgrid(*coord_points_list)
+            cosut = []
+            for coui in cos:
+                cosut.append(np.array(coui.T))
+            self.grid = cosut
 
-        if interp is not None:
-            if type(interp) is str:
-                interp = [interp]
-            for ino in interp:
-                nam = ['lin','exp','box']
-                try:
-                    nam.index(ino)
-                except ValueError:
-                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
-            self.interp.append(np.array(interp))
-        else:
-            interp = np.array(['lin']*self.ndim)
-            if profname == 'pres':
-                indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
-                interp[indx] = 'exp'
-            self.interp.append(np.array(interp))
-            print('No interp found, interp set to default: {}'.format(self.interp[0]))
+        if hierarchy is None:
+            hierarchy = np.arange(self.ndim)
 
-        if hierarchy is not None:
-            self.hierarchy.append(np.array(hierarchy))
-        else:
-            self.hierarchy.append(np.arange(self.ndim))
-            print('No hierarchy found, hierarchy set to default: {}'.format(self.hierarchy[0]))
-        for val in np.unique(self.hierarchy[0]):
-            oi = (self.hierarchy[0] == val)
-            if len(np.unique(self.interp[0][oi])) > 1:
-                raise ValueError('Can not interpolate 2D between int and exp coordinates!')
-            elif np.unique(self.interp[0][oi])[0] == 'exp' and len(self.interp[0][oi]) > 1:
-                raise ValueError('Can not interpolate 2D between exp coordinates!')
+        self.hierarchy = np.array(hierarchy)
 
         return
 
-    def add_profile(self, profile, profname, gridname = None, interp=None, hierarchy = None):
+    def order(self):
+        sorted_names = sorted(self.internal_order.items(), key=operator.itemgetter(1))
+        for cos in sorted_names:
+            print('{}: {}'.format(cos[1],cos[0]))
+        return sorted_names
+
+    def names(self):
+        sorted_names = sorted(self.internal_order.items(), key=operator.itemgetter(1))
+        names = [cos[0] for cos in sorted_names]
+        return names
+
+    def range(self):
+        ranges = []
+        sorted_names = sorted(self.internal_order.items(), key=operator.itemgetter(1))
+        for [nam, num] in sorted_names:
+            coo = self.coords[nam]
+            mino = min(coo)
+            maxo = max(coo)
+            steps = []
+            for co1,co2 in zip(coo[:-1],coo[1:]):
+                steps.append(co2-co1)
+            steps = np.array(steps)
+            steps = np.unique(steps)
+            if len(steps) > 1:
+                stepo = 'irregular'
+            else:
+                stepo = steps[0]
+            rangio = [mino,maxo]
+            ranges.append((nam, rangio))
+            print('{}: {} -> {}  --  step: {}'.format(num,nam,rangio,stepo))
+        return ranges
+
+
+class AtmProfile(object):
+    """
+    Class to represent atmospheric profiles. Contains an AtmGrid object and a routine to get the interpolated value of the profile in the grid.
+    Contains a set of interp strings to determine the type of interpolation.
+    Input:
+        grid -----------> AtmGrid object
+        profile --------> array or list
+        profname ----------> name of the profile (es. 'temp', 'pres', ..)
+        interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour
+    """
+
+    def __init__(self, grid, profile, profname, interp, descr=None):
+        profile = np.array(profile)
+        if type(grid) is not AtmGrid:
+            raise ValueError('grid is not of type AtmGrid. Make grid first.. -> sbm.AtmGrid(coord_names, coord_points)')
+        grid = copy.deepcopy(grid)
+        self.descr = descr
+        setattr(self, profname, copy.deepcopy(profile))
+        self.ndim = grid.ndim
+
+        self.names = []
+        self.grid = copy.deepcopy(grid)
+        self.interp = dict()
+
+        if self.ndim != self.grid.ndim: raise ValueError('profile and grid have different dimensions!')
+
+        self.add_profile(profile, profname, interp)
+
+        return
+
+    def keys(self):
+        return self.names
+
+    def items(self):
+        return zip(self.names, [getattr(self, nam) for nam in self.names])
+
+    def add_profile(self, profile, profname, interp):
         """
         Adds a new profile to the atmosphere.
         """
         profile = np.array(profile)
 
-        if self.ndim != profile.ndim: raise ValueError('New profile {} is not consistent with {}!'.format(profname, self.names[0]))
-        setattr(self, profname, profile.copy())
+        if self.ndim != profile.ndim: raise ValueError('New profile has dim {} instead of {}!'.format(profile.ndim, self.ndim))
+
+        if np.shape(profile) != np.shape(self.grid.grid[0]):
+            print('WARNING: profile shape is different! Trying to invert the order')
+            print(np.shape(profile))
+            profile = profile.T
+            print(np.shape(profile))
+            if np.shape(profile) != np.shape(self.grid.grid[0]):
+                raise ValueError('Profile has the wrong shape')
+            else:
+                print('Reshuffling successful, going on..')
+
+        setattr(self, profname, copy.deepcopy(profile))
 
         self.names.append(profname)
 
-        if interp is not None:
-            if type(interp) is str:
-                interp = [interp]
-            for ino in interp:
-                print(ino)
-                nam = ['lin','exp','box']
-                try:
-                    nam.index(ino)
-                except ValueError:
-                    raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
-            interp = np.array(interp)
-            self.interp.append(interp)
-        else:
-            interp = np.array(['lin']*self.ndim)
-            if profname == 'pres':
-                try:
-                    indx = [('Alt' in pi or 'alt' in pi) for pi in self.gridname].index(True)
-                except:
-                    interp[0] = 'exp'
-            self.interp.append(interp)
-            print('No interp found, interp set to default: {}'.format(interp))
+        if type(interp) is str:
+            interp = [interp]
+        for ino in interp:
+            nam = ['lin','exp','box']
+            try:
+                nam.index(ino)
+            except ValueError:
+                raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
 
-        if hierarchy is not None:
-            hierarchy = np.array(hierarchy)
-            self.hierarchy.append(hierarchy)
-        else:
-            hierarchy = np.arange(self.ndim)
-            self.hierarchy.append(hierarchy)
-            print('No hierarchy found, hierarchy set to default: {}'.format(hierarchy))
-        for val in np.unique(hierarchy):
-            oi = (hierarchy == val)
+        interp = np.array(interp)
+        self.interp[profname] = interp
+
+        for val in np.unique(self.grid.hierarchy):
+            oi = (self.grid.hierarchy == val)
             if len(np.unique(interp[oi])) > 1:
                 raise ValueError('Can not interpolate 2D between int and exp coordinates!')
             elif np.unique(interp[oi])[0] == 'exp' and len(interp[oi]) > 1:
                 raise ValueError('Can not interpolate 2D between exp coordinates!')
-
         return
 
-    # def __getitem__(self, *args, **4kwargs):
-    #     for name in self._all_:
-    #         profilo = getattr(self, name)
-    #         sliced_prof = profilo.__getitem__(*args,**kwargs)
-    #         setattr(obj, name, sliced_prof)
-    #     np.ndarray.__getitem__(self.array_view, *args, **kwargs)
-    #     return
-    #
-    # def __getslice__(self, *args, **kwargs):
-    #     for name in self._all_:
-    #         profilo = getattr(self, name)
-    #         sliced_prof = profilo.__getslice__(*args,**kwargs)
-    #         setattr(obj, name, sliced_prof)
-    #     obj.grid = self.grid
-    #     return obj
+    def __getitem__(self, key):
+        """
+        getitem works on coordinate values. for Example, if I have a grid in altitudes that goes from 1. to 100. and in lats from 30 to 80, and i want to extract alts from 20 to 30 and lats from 50 to 70, I have to write: new_prof = prof[20.:30.,50:70]. If I set the step as well, this tells the new interpolation step of the profile, based.
+        """
+
+        if len(key) != self.ndim:
+            raise ValueError('number of dimension is {}, but {} were defined in getitem'.format(self.ndim, len(key)))
+
+        for slic in key:
+            if slic.step is not None:
+                return self.__getslice__(key)
+
+        cond_tot = np.ones(np.shape(self.grid.grid[0]),dtype = bool)
+        for coord, slic in zip(self.grid.grid, key):
+            #print(coord, slic)
+            if slic.start is not None and slic.stop is not None:
+                cond = (coord >= slic.start) & (coord <= slic.stop)
+            elif slic.start is None and slic.stop is not None:
+                cond = (coord <= slic.stop)
+            elif slic.start is not None and slic.stop is None:
+                cond = (coord >= slic.start)
+            else:
+                continue
+            cond_tot = cond_tot & cond
+
+        names = []
+        coords = []
+        for nam, coord in zip(self.grid.names(), self.grid.grid):
+            names.append(nam)
+            coo = np.unique(coord[cond_tot])
+            coords.append(coo)
+
+        nugrid_ok = AtmGrid(names, coords)
+
+        for profname in self.names:
+            prof = getattr(self, profname)
+            proflin = prof[cond_tot]
+            nuprof = proflin.reshape(np.shape(nugrid_ok.grid[0]))
+            if 'profnew' in locals():
+                profnew.add_profile(nuprof, profname, self.interp[profname])
+            else:
+                profnew = AtmProfile(nugrid_ok, nuprof, profname, self.interp[profname])
+
+        return profnew
+
+
+    def __getslice__(self, key):
+        print('slice!')
+        print('non lho scrittaaaaaaaaaaaa')
+        print(key)
+        return
+
+
+    def __add__(self, other, profname1 = None, profname2 = None, new_profname = None):
+        """
+        Sums two profiles. Just if they are the same.
+        """
+        if profname1 is None:
+            if len(self.names) > 1:
+                raise ValueError('profname1 not defined. which profile do I have to sum?')
+            else:
+                profname1 = self.names[0]
+
+        if profname2 is None:
+            if len(other.names) > 1:
+                raise ValueError('profname2 not defined. which profile do I have to sum?')
+            else:
+                profname2 = other.names[0]
+
+        if new_profname is None:
+            new_profname = profname1
+
+        if self.grid.grid != other.grid.grid:
+            raise ValueError('Cannot sum two profiles with different grids.')
+        else:
+            prof = getattr(self, profname1)+getattr(other, profname2)
+            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
+
+        return profnew
+
+
+    def __sub__(self, other, profname1 = None, profname2 = None, new_profname = None):
+        """
+        Sums two profiles. Just if they are the same.
+        """
+        if profname1 is None:
+            if len(self.names) > 1:
+                raise ValueError('profname1 not defined. which profile do I have to sum?')
+            else:
+                profname1 = self.names[0]
+
+        if profname2 is None:
+            if len(other.names) > 1:
+                raise ValueError('profname2 not defined. which profile do I have to sum?')
+            else:
+                profname2 = other.names[0]
+
+        if new_profname is None:
+            new_profname = profname1
+
+        if self.grid.grid != other.grid.grid:
+            raise ValueError('Cannot sum two profiles with different grids.')
+        else:
+            prof = getattr(self, profname1)-getattr(other, profname2)
+            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
+
+        return profnew
+
+
+    def __mul__(self, other, profname1 = None, profname2 = None, new_profname = None):
+        """
+        Sums two profiles. Just if they are the same.
+        """
+        if profname1 is None:
+            if len(self.names) > 1:
+                raise ValueError('profname1 not defined. which profile do I have to sum?')
+            else:
+                profname1 = self.names[0]
+
+        if profname2 is None:
+            if len(other.names) > 1:
+                raise ValueError('profname2 not defined. which profile do I have to sum?')
+            else:
+                profname2 = other.names[0]
+
+        if new_profname is None:
+            new_profname = profname1
+
+        if self.grid.grid != other.grid.grid:
+            raise ValueError('Cannot sum two profiles with different grids.')
+        else:
+            prof = getattr(self, profname1)*getattr(other, profname2)
+            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
+
+        return profnew
+
+
+    def __div__(self, other, profname1 = None, profname2 = None, new_profname = None):
+        """
+        Sums two profiles. Just if they are the same.
+        """
+        if profname1 is None:
+            if len(self.names) > 1:
+                raise ValueError('profname1 not defined. which profile do I have to sum?')
+            else:
+                profname1 = self.names[0]
+
+        if profname2 is None:
+            if len(other.names) > 1:
+                raise ValueError('profname2 not defined. which profile do I have to sum?')
+            else:
+                profname2 = other.names[0]
+
+        if new_profname is None:
+            new_profname = profname1
+
+        if self.grid.grid != other.grid.grid:
+            raise ValueError('Cannot sum two profiles with different grids.')
+        else:
+            prof = getattr(self, profname1)/getattr(other, profname2)
+            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
+
+        return profnew
 
 
     def calc(self, point, profname = None):
@@ -1336,7 +1909,6 @@ class AtmProfile(object):
         :param profname: name of the profile to calculate (es: 'temp', 'pres')
         :return: If only one profile is stored in AtmProfile, the output is a number. If there are more profiles stored in AtmProfile, the output of calc is a dict containing all interpolated values. If profname is set (ex. 'temp') returns the value of the profile 'temp' at the point.
         """
-
         try:
             len(point)
             if type(point) is list:
@@ -1345,9 +1917,9 @@ class AtmProfile(object):
             point = np.array([point])
 
         resu = []
-        for nam, i in zip(self.names, range(len(self.names))):
+        for nam in self.names:
             prof = getattr(self, nam)
-            value = interp(prof, self.grid, point, itype=self.interp[i], hierarchy=self.hierarchy[i])
+            value = interp(prof, np.array(self.grid.grid), point, itype=self.interp[nam], hierarchy=self.grid.hierarchy)
             resu.append(value)
 
         if len(self.names) == 1:
@@ -1364,6 +1936,7 @@ class AtmProfile(object):
         Interpolates the original profile nomeprof in the new_grid coords. Returns the interpolated profile.
         """
 
+        print('funziona solo in 1D')
         if new_grid.ndim == 1:
             new_grid = np.array([new_grid])
 
@@ -1388,138 +1961,35 @@ class AtmProfile(object):
         """
         pass
 
-    def calc_along_LOS(self, LOS, nomeprof = 'prof', step = None, tau_step = 1e-5, max_line_strength = None, delta_var_prof = 0.01):
-        """
-        Returns a vector with prof values on the LOS and a vector of positions of the selected points.
-        """
+
+class TestAtmProf(AtmProfile):
+    def __init__(self):
+        alt = np.linspace(100.,500.,41)
+        lat = np.linspace(20., 80., 7)
+        grid = AtmGrid(['alt','lat'], [alt, lat])
+
+        prof = np.linspace(0.,100.,41*7)
+        prof = prof.reshape(41,7)
+        AtmProfile.__init__(self, grid, prof, 'gigi', ['lin','box'], [0,1])
+        return
+
+
+class PT_atm_AltLat(AtmProfile):
+    """
+    PT structure of the atmosphere discretized in alts and lats. linear (exp for pressure) interpolation in altitude, box in latitude.
+    temps : list of vertical temp profiles, one for each latitude box
+    press : list of vertical pres profiles, one for each latitude box
+    """
+
+    def __init__(self, temps, press, alt_grid, lat_grid):
         pass
 
 
 
 #### FINE AtmProfile class
 
-# class AtmProfile_ndarr(np.ndarray):
-#     """
-#     Class to represent atmospheric profiles. Contains a geolocated grid and a routine to get the interpolated value of the profile in the grid.
-#     Contains a set of interp strings to determine the type of interpolation.
-#     Input:
-#         grid -----------> coordinates grid : np.mgrid with variable dimensions. es: (lat,lon,alt), (lat,alt,sza) ..
-#         gridname -------> names for the dimensions of grid
-#         profile --------> profile : same dimensions as grid
-#         interp ---------> list of strings : how to interpolate in given dimension? Accepted values: 'lin' - linear interp, 'exp' - exponential interp o 'box' - nearest neighbour o ... others ...
-#         hierarchy ------> smaller value indicates in which dimension to interpolate first? if 2 dimensions have the same value
-#     """
-#
-#     def __new__(cls, profile, grid, profname = 'prof', gridname = None, interp=None, hierarchy = None, descr=None):
-#
-#         obj = np.asarray(profile).view(cls)
-#
-#         obj.descr = descr
-#         setattr(obj, profname, profile.copy())
-#
-#         _all_ = []
-#         _all_.append(profname)
-#         obj._all_ = _all_
-#
-#         if grid.ndim == 1:
-#             grid = np.array([grid])
-#             print('Transformed grid to a 1-dim grid array',np.shape(grid))
-#
-#         obj.grid = grid.copy()
-#
-#         if obj.ndim != grid.ndim-1: raise ValueError('profile and grid have different dimensions!')
-#
-#         if interp is not None:
-#             for ino in interp:
-#                 nam = ['lin','exp','box']
-#                 try:
-#                     nam.index(ino)
-#                 except ValueError:
-#                     raise ValueError('{} is not a possible interpolation scheme. Possible schemes: {}'.format(ino,nam))
-#             obj.interp = np.array(interp)
-#         else:
-#             obj.interp = np.array(['lin']*obj.ndim)
-#             print('No interp found, interp set to default: {}'.format(obj.interp))
-#
-#         if gridname is not None:
-#             obj.gridname = np.array(gridname)
-#             for name,coord in zip(gridname,grid):
-#                 setattr(obj,name,np.sort(np.unique(coord)))
-#         else:
-#             obj.gridname = np.array(['']*obj.ndim)
-#             print('No gridname set. Enter names for the coordinate grid')
-#
-#         if hierarchy is not None:
-#             obj.hierarchy = np.array(hierarchy)
-#         else:
-#             obj.hierarchy = np.arange(obj.ndim)
-#             print('No hierarchy found, hierarchy set to default: {}'.format(obj.hierarchy))
-#         for val in np.unique(obj.hierarchy):
-#             oi = (obj.hierarchy == val)
-#             if len(np.unique(obj.interp[oi])) > 1:
-#                 raise ValueError('Can not interpolate 2D between int and exp coordinates!')
-#             elif np.unique(obj.interp[oi])[0] == 'exp':
-#                 raise ValueError('Can not interpolate 2D between exp coordinates!')
-#
-#         return obj
-#
-#     def __array_finalize__(self, obj):
-#         if obj is None: return
-#         self.descr = getattr(obj, 'descr', None)
-#         self.grid = getattr(obj, 'grid', None)
-#         self.prof = getattr(obj, 'prof', None)
-#         self._all_ = getattr(obj, '_all_', None)
-#         self.interp = getattr(obj, 'interp', None)
-#         self.hierarchy = getattr(obj, 'hierarchy', None)
-#         return
-#
-#     # def __getitem__(self, *args, **kwargs):
-#     #     for name in self._all_:
-#     #         profilo = getattr(self, name)
-#     #         sliced_prof = profilo.__getitem__(*args,**kwargs)
-#     #         setattr(obj, name, sliced_prof)
-#     #     np.ndarray.__getitem__(self.array_view, *args, **kwargs)
-#     #     return
-#     #
-#     # def __getslice__(self, *args, **kwargs):
-#     #     for name in self._all_:
-#     #         profilo = getattr(self, name)
-#     #         sliced_prof = profilo.__getslice__(*args,**kwargs)
-#     #         setattr(obj, name, sliced_prof)
-#     #     obj.grid = self.grid
-#     #     return obj
-#
-#     def calc(self, point):
-#         """
-#         Interpolates the profile at the given point.
-#         :param point: np.array point to be considered. len(point) = self.ndim
-#         :return:
-#         """
-#
-#         value = interp(self, self.grid, point, itype=self.interp, hierarchy=self.hierarchy)
-#
-#         return value
-#
-#     def collapse(self, coords):
-#         """
-#         Returns the profile corresponding to the selected coordinates. If all coordinates are specified returns the scalar value from calc.
-#         :param coords:
-#         :return:
-#         """
-#         pass
-#
-#     def smooth_prof(self, points):
-#         """
-#         Returns a smoothed profile, with spline interpolation. To be used mainly for showing purposes.
-#         """
-#         pass
-
-
-#### FINE AtmProfile class
-
 def interp(prof, grid, point, itype=None, hierarchy=None):
     """
-    Returns the a matrix of dims ndim x 2, with indexes of the two closest values among the grid coordinates to the point coordinate.
     :param point: 1d array with ndim elements, the point to be considered
     :param grid: np.mgrid() array (ndim+1)
     :param prof: the profile to be interpolated (ndim array)
@@ -1530,12 +2000,13 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
 
     try:
         ndim = len(point)
+        point = np.array(point)
     except: # point è uno scalare
         ndim = 1
         point = np.array([point])
 
     if ndim != grid.ndim-1:
-        raise ValueError('Point should have {:1d} dimensions, instead has {:1d}'.format(grid.ndim,ndim))
+        raise ValueError('Point should have {:1d} dimensions, instead has {:1d}'.format(grid.ndim-1,ndim))
 
     if itype is None:
         itype = np.array(ndim*['lin'])
@@ -1545,29 +2016,35 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     # Calcolo i punti di griglia adiacenti, con i relativi pesi
     indxs = []
     weights = []
-    #print(np.shape(grid))
     for p, arr, ity in zip(point,grid,itype):
-        #print(p, arr, ity)
         indx, wei = find_between(np.unique(arr),p,ity)
         indxs.append(indx)
         weights.append(wei)
 
-    #print(indxs,weights)
-    #print(np.shape(prof))
     # mi restringo l'array ad uno con solo i valori che mi interessano
     profi = prof
     for i in range(ndim):
-        profi = np.take(profi,indxs[i],axis=i)
-        #gridi = np.take(gridi,indxs[i],axis=i)
-    #print(np.shape(profi))
-    #print(profi)
+        profi = profi.take(indxs[i],axis=i)
 
-    # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente
+    # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente. profint si restringe passo passo, perde un asse alla volta.
     hiesort = np.argsort(hierarchy)
+    hiesort_dyn = []
+    #print(hiesort)
+    for num in range(ndim):
+        ok = hiesort[0]
+        hiesort_dyn.append(ok)
+        hiesort = hiesort[1:]
+        for nnn in range(len(hiesort)):
+            if hiesort[nnn] > ok:
+                hiesort[nnn] -= 1
+    #print(hiesort_dyn)
+
     profint = profi
-    for ax in hiesort:
-        vals = [np.take(profint,ind,axis=ax) for ind in [0,1]]
+    for ax in hiesort_dyn:
+        vals = [profint.take(ind,axis=ax) for ind in [0,1]]
         profint = int1d(vals,weights[ax],itype[ax])
+        #print('aa',vals,weights[ax],itype[ax])
+        #print('uuu',profint)
 
     return profint
 
@@ -1668,8 +2145,19 @@ def int1d(vals,weights,itype):
 
     return intval
 
+def counted(f):
+    def wrapped(*args, **kwargs):
+        wrapped.calls += 1
+        return f(*args, **kwargs)
+    wrapped.calls = 0
+    return wrapped
 
-def find_between(array,value,interp='lin'):
+@counted
+def stocazzo():
+    print('stocazzo')
+
+
+def find_between(array, value, interp='lin', thres = 1.e-5):
     """
     Returns the indexes of the two closest points in array and the relative weights for interpolation.
     :param array: grid Array
@@ -1678,6 +2166,25 @@ def find_between(array,value,interp='lin'):
     'box' -> nearest neighbour,'1cos' -> 1/cos(x) for SZA values)
     :return:
     """
+    array = np.array(array)
+    thres = thres*(array[1]-array[0])
+    if value < np.min(array)-thres or value > np.max(array)+thres:
+        raise ValueError('Extrapolation required! val: {} min: {} max: {}'.format(value, np.min(array), np.max(array)))
+    elif value < np.min(array):
+        #print('ATTENTION! slight mismatch in max/min grid values and point required. {} {} diff {}'.format(value, np.min(array), value-np.min(array)))
+        #stocazzo()
+        #if stocazzo.calls > 27:
+        #    raise ValueError('stocazzo')
+        idx = np.sort(array)[:2]
+        weights = np.array([1,0])
+    elif  value > np.max(array):
+        #print('ATTENTION! slight mismatch in max/min grid values and point required. {} {} diff {}'.format(value, np.max(array), value-np.max(array)))
+        #stocazzo()
+        #if stocazzo.calls > 27:
+        #    raise ValueError('stocazzo')
+        idx = np.sort(array)[-2:]
+        weights = np.array([0,1])
+
     ndim = array.ndim
     dists = np.sort(np.abs(array-value))
     indxs = np.argsort(np.abs(array-value))
@@ -1992,12 +2499,13 @@ def write_obs(n_freq, n_limb, dists, alts, freq, obs, flags, filename, old_file 
     return
 
 
-def read_input_prof_gbb(filename, ptype, n_alt_max =None, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4):
+def read_input_prof_gbb(filename, ptype, n_alt_max =None, n_alt = 151, alt_step = 10.0, n_gas = 86, n_lat = 4, read_bad_names = False):
     """
     Reads input profiles from gbb standard formatted files (in_temp.dat, in_pres.dat, in_vmr_prof.dat).
     Profile order is from surface to TOA.
     type = 'vmr', 'temp', 'pres'
     :return: profiles
+    read_bad_names is to read profiles of stuff that is not in the HITRAN list.
     """
     alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
 
@@ -2013,15 +2521,22 @@ def read_input_prof_gbb(filename, ptype, n_alt_max =None, n_alt = 151, alt_step 
             try:
                 lin = infile.readline()
                 print(lin)
-                num = lin.split()[0]
+                num = int(lin.split()[0])
                 nome = lin.split()[1]
             except:
                 break
+
+            try:
+                nome = find_molec_metadata(num, 1)['mol_name']
+            except:
+                if not read_bad_names:
+                    break
+
             prof = []
             while len(prof) < n_alt:
                 line = infile.readline()
                 prof += list(map(float, line.split()))
-            prof = np.array(prof[::-1])
+            prof = np.array(prof[::-1])*1.e-6 # SETTING UNITY TO ABSOLUTE FRACTION, NOT PPM
             if n_alt_max is not None and n_alt_max < n_alt:
                 prof = prof[:n_alt_max]
             proftot.append(prof)
@@ -2143,7 +2658,9 @@ def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151
                 prof += list(map(float, line.split()))
             prof = np.array(prof[::-1])
             prof = ratio_to_vibtemp(energy, prof, temp)
-            prof = AtmProfile(prof, alts, profname = 'vibtemp')
+            # prof = AtmProfile(prof, alts, profname = 'vibtemp')
+            alt_gri = AtmGrid('alt', alts)
+            prof = AtmProfile(alt_gri, prof, 'vibtemp', 'lin')
 
             # levello = Level(lev_str, energy, degen = -1, simmetry = simms)
             # levello.add_vibtemp(prof)
@@ -2490,7 +3007,61 @@ def read_input_atm_man(filename):
     return alts, temp, pres
 
 
-def read_tvib_manuel(filename, n_alt_max = None):
+def add_nLTE_molecs_from_tvibmanuel(planet, filename, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
+    """
+    Returns a set of molecs with the correct levels and tvibs.
+    """
+    alts, mol_names, levels, energies, vib_ok = read_tvib_manuel(filename, n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+
+
+    molecs = dict()
+    T_kin = planet.atmosphere.temp
+    alt_grid = AtmGrid('alt', planet.atmosphere.grid.coords['alt'])
+    T_kin = AtmProfile(alt_grid, T_kin, 'vibtemp', 'lin')
+
+    for molcoso, lev, ene, vib in zip(mol_names, levels, energies, vib_ok):
+        mol = int(molcoso[:-1])
+        iso = int(molcoso[-1])
+
+        info = find_molec_metadata(mol, iso)
+
+        try:
+            molec = molecs[info['mol_name']]
+        except:
+            molecs[info['mol_name']] = Molec(mol, name = info['mol_name'])
+            molec = molecs[info['mol_name']]
+
+        striso = 'iso_{:1d}'.format(iso)
+
+        try:
+            isomol = getattr(molec, striso)
+        except:
+            molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
+            isomol = getattr(molec, striso)
+
+            # add_fundamental
+            if add_fundamental:
+                minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
+                lev_0 = ''
+                for lett in minstr:
+                    try:
+                        num = int(lett)
+                        lev_0 += '0'
+                    except:
+                        lev_0 += lett
+                isomol.add_level(lev_0, 0.0, vibtemp = T_kin)
+
+        isomol.add_level(lev, ene, vibtemp = vib)
+
+    if linee is not None:
+        for molec in molecs.values():
+            for iso in molec.all_iso:
+                getattr(molec, iso).add_simmetries_levels(linee)
+
+    return molecs
+
+
+def read_tvib_manuel(filename, n_alt_max = None, extend_to_alt = None):
     """
     Reads input atmosphere in manuel standard.
     :param filename:
@@ -2525,8 +3096,9 @@ def read_tvib_manuel(filename, n_alt_max = None):
     vibtemps = []
     for i in range(n_lev):
         linea = trova_spip(infile,hasha = '$',read_past = True)
-        levels.append(linea[0:15].strip())
-        energies.append(float(linea[15:]))
+        ind_e = linea.index(linea.split()[-1])
+        levels.append(linea[0:ind_e].strip())
+        energies.append(float(linea.split()[-1]))
         molecs.append(infile.readline().rstrip())
         infile.readline()
 
@@ -2540,8 +3112,19 @@ def read_tvib_manuel(filename, n_alt_max = None):
     infile.close()
 
     vib_ok = []
+    alts = np.array(alts)
+    alt_grid = AtmGrid('alt', alts)
     for tempu in vibtemps:
-        tempu_ok = AtmProfile(np.array(tempu),np.array(alts))
+        if extend_to_alt is not None:
+            if extend_to_alt > max(alts):
+                stp = alts[1]-alts[0]
+                alts2 = np.arange(max(alts)+stp, extend_to_alt+stp/2, stp)
+                alts_ok = np.append(alts, alts2)
+                vals = np.array(len(alts2)*[tempu[-1]])
+                tempu = np.array(tempu)
+                tempu = np.append(tempu, vals)
+        alt_grid = AtmGrid('alt', alts_ok)
+        tempu_ok = AtmProfile(alt_grid, tempu, 'vibtemp', 'lin')
         vib_ok.append(tempu_ok)
 
     return alts, molecs, levels, energies, vib_ok
@@ -2710,6 +3293,9 @@ def read_inputs(nomefile, key_strings, n_lines = None, itype = None, defaults = 
     is_defaults = []
     with open(nomefile, 'r') as infile:
         lines = infile.readlines()
+        # Skips commented lines:
+        lines = [line for line in lines if not line.lstrip()[:1] == '#']
+
         for key, deflt, nli, typ in zip(keys,defaults,n_lines,itype):
 
             is_key = np.array([key in line for line in lines])
