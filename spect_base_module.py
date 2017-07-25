@@ -199,9 +199,10 @@ class LineOfSight(object):
         return np.array(szas)
 
 
-    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, extinction_coeff = None, refraction = False, adaptive_step = False):
+    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, refraction = False, LOS_order = 'radtran'):
         """
-        Calculates the coordinates of the points that the LOS crosses in the atmosphere. If extinction_coeff is set, the coordinate along the LOS is tau, the optical depth, instead it is just the distance in km. If start_from_TOA is True, the LOS path starts at the first intersection with the atmosphere.
+        Calculates the coordinates of the points that the LOS crosses in the atmosphere. If start_from_TOA is True (default), the LOS path starts at the first intersection with the atmosphere, instead it starts from the spacecraft.
+        The default order is from the closest point to spacecraft to the other side (LOS_order = 'radtran'). Order can be set to 'photon'.
 
         NO REFRACTION INCLUDED!! work in progress.....
         """
@@ -249,9 +250,6 @@ class LineOfSight(object):
         inside = True
         point = point_0
         while inside:
-            if adaptive_step:
-                #Something that calculates the best step at point
-                pass
             point = self.move_along_LOS(planet, point, delta_x, refraction = refraction)
             inside = (LA.norm(point) < TOA_R)
             #print(inside, point)
@@ -269,7 +267,9 @@ class LineOfSight(object):
                 los_points.append(copy.deepcopy(po))
                 print('Still inside at {} (spherical)'.format(po.Spherical()))
 
-        los_points = los_points[::-1]
+        #l'integrazione va su tau, devo partire dalla "fine" della LOS, la parte più vicina a me.
+        if LOS_order == 'photon':
+            los_points = los_points[::-1]
 
         self.intersections = los_points
 
@@ -545,7 +545,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -667,11 +667,11 @@ class LineOfSight(object):
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa)
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile)
                 if calc_derivatives:
-                    ret_set_iso = coso[1]
-                    for par_iso, par in zip(ret_set_iso.set, ret_set.set):
-                        par.hires_deriv += par_iso.hires_deriv
+                    # ret_set_iso = coso[1]
+                    # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
+                    #     par.hires_deriv += par_iso.hires_deriv
                     intens = coso[0]
                 else:
                     intens = coso
@@ -689,7 +689,7 @@ class LineOfSight(object):
             return intensity, single_intensities
 
 
-    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None):
+    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None):
         """
         Integrates the formal solution of the radtran equation along the LOS.
         : abs_coeff_tot : the absorption coefficient of all gases in the atmosphere.
@@ -747,13 +747,23 @@ class LineOfSight(object):
 
             if calc_derivatives:
                 degamadeq = ab*gama*(-iso_ab)
-                deSdeq = (em-ab*Source)/ab_tot *iso_ab
+                # questo per il pezzo non-LTE che non serve a nulla in realtà nella maggior parte dei casi
+                cos = ((ab*(nd*iso_ab))/ab_tot)*(-1.0) + 1.0
+                cos.spectrum[np.isnan(cos.spectrum)] = 0.0
+                cos.spectrum[np.isinf(cos.spectrum)] = 0.0
+                if np.any(cos.spectrum < 0.0) or np.any(cos.spectrum > 1.0):
+                    raise RuntimeWarning('Strange things happening in the non-LTE derivative of the spectrum')
+                    cos.spectrum[cos.spectrum > 1.0] = 1.0
+                    cos.spectrum[cos.spectrum < 0.0] = 0.0
+                deSdeq = Source*cos*degamadeq/nd
+
                 for par in ret_set.set:
-                    Gama_strange[par.key] = Gama_strange[par.key]*gama + degamadeq*Gama_tot*deriv_factors[par.key][num]
                     pezzo1 = Source*Gama_tot*degamadeq*(-deriv_factors[par.key][num])
                     pezzo2 = Source*unomenogama*Gama_strange[par.key]
                     pezzo3 = deSdeq*unomenogama*Gama_tot*deriv_factors[par.key][num]
-                    par.hires_deriv += pezzo1+pezzo2+pezzo3
+                    par.hires_deriv += (pezzo1+pezzo2+pezzo3)
+                    print('ssssssssssssssssssssssss {} -> {}'.format(num, par.hires_deriv.max()))
+                    Gama_strange[par.key] = Gama_strange[par.key]*gama + degamadeq*Gama_tot*deriv_factors[par.key][num]
                     if par is ret_set.set[-1]:
                         pl.figure(17)
                         pezzo1.plot(label = 'step {}'.format(num))
@@ -761,12 +771,8 @@ class LineOfSight(object):
                         pezzo2.plot(label = 'step {}'.format(num))
                         pl.figure(19)
                         pezzo3.plot(label = 'step {}'.format(num))
-                        pl.figure(20)
-                        Source.norm_plot(label = 'source')
-                        unomenogama.norm_plot(label = 'gama')
-                        degamadeq.norm_plot(label = 'degamadeq')
-                        Gama_tot.plot(label = 'Gama_tot')
-                        Gama_strange[par.key].norm_plot(label = 'gama_str')
+                        if iso_ab > 0.5 and debugfile is not None:
+                            pickle.dump([num, pezzo1, pezzo2, pezzo3, Source, unomenogama, degamadeq, Gama_tot, Gama_strange], debugfile)
 
             Gama_tot *= gama
 
