@@ -110,10 +110,16 @@ class LineOfSight(object):
     Class to represent the geometry of an observation.
     """
 
-    def __init__(self, spacecraft_coords, second_point):
+    def __init__(self, spacecraft_coords, second_point, delta_ang = None, rot_plane_ang = None):
+        """
+        The coordinates of first and second point (Coords objects).
+        : delta_ang : (optional). The los vector is rotated by delta_ang (in rad) in the plane containing the original vector and the planet center. If rot_plane_ang is set, the rotation of the los vector is performed in a plane rotated counterclockwise by rot_plane_ang.
+        """
         self.starting_point = copy.deepcopy(spacecraft_coords)
         self.second_point = copy.deepcopy(second_point)
         self.atm_quantities = dict()
+        self.delta_ang = delta_ang
+        self.rot_plane_ang = rot_plane_ang
 
         return
 
@@ -121,13 +127,24 @@ class LineOfSight(object):
         """
         Adds to the LOS object a parameter vector that points from the Spacecraft to the observed point on the planet.
         """
+        p1 = self.starting_point
+        p2 = self.second_point
+        if self.delta_ang is not None:
+            dist = p1.distance(p2, units = 'km')
+            delta_h = mt.tan(self.delta_ang)*dist
+            olc2 = p2.Spherical()
+            olc2[2] += delta_h
+            p2 = Coords(olc2, s_ref='Spherical')
+            if self.rot_plane_ang is not None:
+                raise ValueError('sto cazzone non ha ancora scritto niente qua')
 
-        c1 = copy.deepcopy(self.starting_point.Cartesian())
-        c2 = copy.deepcopy(self.second_point.Cartesian())
+        c1 = copy.deepcopy(p1.Cartesian())
+        c2 = copy.deepcopy(p2.Cartesian())
 
         _LOS = (c2-c1)/LA.norm(c2-c1) # Unit LOS vector
-        print(c2-c1,LA.norm(c2-c1))
-        print(self.starting_point.Cartesian(),self.second_point.Cartesian())
+        # print(c2-c1,LA.norm(c2-c1))
+        # print(p1.Cartesian(), self.second_point.Cartesian(), p2.Cartesian())
+
         self._LOS = _LOS
 
         return _LOS
@@ -136,6 +153,7 @@ class LineOfSight(object):
     def details(self):
         print('Observer point: {}, {}'.format(self.starting_point.Cartesian(), self.starting_point.Spherical()))
         print('Second point: {}, {}'.format(self.second_point.Cartesian(), self.second_point.Spherical()))
+        print('delta_ang: {}, rot_plane_ang: {}'.format(self.delta_ang, self.rot_plane_ang))
         try:
             print('LOS vector: {}'.format(self._LOS))
         except:
@@ -199,7 +217,7 @@ class LineOfSight(object):
         return np.array(szas)
 
 
-    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, refraction = False, LOS_order = 'radtran'):
+    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, refraction = False, LOS_order = 'radtran', verbose = False):
         """
         Calculates the coordinates of the points that the LOS crosses in the atmosphere. If start_from_TOA is True (default), the LOS path starts at the first intersection with the atmosphere, instead it starts from the spacecraft.
         The default order is from the closest point to spacecraft to the other side (LOS_order = 'radtran'). Order can be set to 'photon'.
@@ -211,7 +229,7 @@ class LineOfSight(object):
             _LOS = self._LOS
         except Exception as cazzillo:
             _LOS = self.calc_LOS_vector()
-            print(cazzillo)
+            #print(cazzillo)
 
         TOA_R = planet.atm_extension + planet.radius
         R = planet.radius
@@ -260,12 +278,12 @@ class LineOfSight(object):
                 if i_type != 'Ingress':
                     raise ValueError('No intersection with shell!')
                 los_points.append(Coords(point, R = planet.radius))
-                print('Hit the surface.. Stopping ray path.')
+                if verbose: print('Hit the surface.. Stopping ray path.')
                 break
             elif inside and not surface_hit:
                 po = Coords(point, R = planet.radius)
                 los_points.append(copy.deepcopy(po))
-                print('Still inside at {} (spherical)'.format(po.Spherical()))
+                if verbose: print('Still inside at {} (spherical)'.format(po.Spherical()))
 
         #l'integrazione va su tau, devo partire dalla "fine" della LOS, la parte più vicina a me.
         if LOS_order == 'photon':
@@ -276,7 +294,7 @@ class LineOfSight(object):
         return los_points
 
 
-    def calc_radtran_steps(self, planet, lines, max_opt_depth = 1.0, max_T_variation = 5.0, max_Plog_variation = 0.2, calc_derivatives = False, bayes_set = None):
+    def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False):
         """
         Calculates the optimal step for radtran calculation.
         """
@@ -365,6 +383,7 @@ class LineOfSight(object):
         stp_tot = 0.0
         estim_tot_depth = 0.0
 
+        cond_names = np.array(['temp','pres','tvib','opt_depth'])
         while not end_LOS:
             num += 1
             point_prev = self.intersections[num-1]
@@ -374,7 +393,8 @@ class LineOfSight(object):
             step += step_add
             abstop = max([abs_max[gas]*self.atm_quantities[gas][num] for gas in planet.gases])
             opt_depth_step += abstop*step_add
-            #print(num, step, opt_depth_step)
+
+            #if verbose: print(num, step, opt_depth_step)
 
             t_var = max(self.atm_quantities['temp'][num_orig:num])-min(self.atm_quantities['temp'][num_orig:num])
             p_var_log = np.log(max(self.atm_quantities['pres'][num_orig:num])/min(self.atm_quantities['pres'][num_orig:num]))
@@ -389,12 +409,12 @@ class LineOfSight(object):
             if t_var > max_T_variation: cond[0] = True
             if p_var_log > max_Plog_variation: cond[1] = True
             if np.any(tvibs_var > max_T_variation): cond[2] = True
-            if opt_depth_step > max_opt_depth: cond[3] = True
+            if max_opt_depth is not None:
+                if opt_depth_step > max_opt_depth: cond[3] = True
 
             # Check T,P,Tvib variation
             # Check optical_depth
             if np.any(cond):
-                print(num, opt_depth_step, max_opt_depth, step)
                 num -= 1
                 point = point_prev
                 step -= step_add
@@ -402,7 +422,6 @@ class LineOfSight(object):
                 stepping = True
 
             if num == len(self.intersections)-1:
-                print('yogaaaaaaaaaaa')
                 stepping = True
                 end_LOS = True
 
@@ -410,7 +429,7 @@ class LineOfSight(object):
                 raise ValueError('RadStep is thick with 1 step! raise the max_opt_depth threshold or lower the LOS step length..')
 
             if stepping:
-                print('stepping {:5d} <-> {:5d} of {:5d}. z0: {:8.3f} zf: {:8.3f}. Op_d: {:8.3f}. Trig: {}. E stocazzo.. {}'.format(num_orig, num, len(self.intersections), point_orig.Spherical()[2], point.Spherical()[2], opt_depth_step, np.argwhere(cond == True), peak_val))
+                if verbose: print('stepping {:5d} <-> {:5d} of {:5d}. z0: {:8.3f} zf: {:8.3f}. Op_d: {:8.3f}. Trig: {}.'.format(num_orig, num, len(self.intersections), point_orig.Spherical()[2], point.Spherical()[2], opt_depth_step, cond_names[cond]))
 
                 estim_tot_depth += opt_depth_step
                 stp_tot += step
@@ -424,8 +443,6 @@ class LineOfSight(object):
                     self.radtran_steps['ndens'][gas].append(nd)
                     self.radtran_steps['pres'][gas].append(pi)
                     self.radtran_steps['temp'][gas].append(ti)
-                    print('caiaioooo')
-                    print(pi,ti,nd)
                     # non-LTE part
                     gasso = planet.gases[gas]
                     for iso in gasso.all_iso:
@@ -439,8 +456,6 @@ class LineOfSight(object):
                                     levello.local_vibtemp.append(tvi)
                                 except:
                                     levello.add_local_vibtemp(tvi)
-                                print(gas,iso,lev,levello.energy,tvi)
-                                print(vibtemp_to_ratio(levello.energy, tvi, ti))
 
                 ndtot, _ = CurGod(self.atm_quantities['ndens'][num_orig:num+1], np.ones(num+1-num_orig))
                 cdtot = ndtot*step
@@ -449,12 +464,12 @@ class LineOfSight(object):
                     for cos in bayes_set.sets.values():
                         deriv_set = self.radtran_steps['deriv_factors'][cos.name]
                         gas = cos.name
-                        print('gssss ', gas)
+                        if verbose: print('gssss ', gas)
                         for par in cos.set:
                             masklos = self.calc_along_LOS(par.maskgrid)
                             nd, cg_mask = CurGod(self.atm_quantities[gas][num_orig:num+1], masklos[num_orig:num+1])
                             deriv_set[par.key].append(cdtot*cg_mask)
-                            print('dssss ', par.key, cg_mask)
+                            if verbose: print('dssss ', par.key, cg_mask)
 
                 num_orig = num
                 point_orig = self.intersections[num]
@@ -501,10 +516,10 @@ class LineOfSight(object):
             print(gas)
             gasso = planet.gases[gas]
             ndens = self.calc_abundance(planet, gas)
-            print('aaaaaaaaaaaaaaaaaargh ', ndens)
+            #print('aaaaaaaaaaaaaaaaaargh ', ndens)
             iso_abs = []
             iso_emi = []
-            print(gasso.all_iso)
+            #print(gasso.all_iso)
             for iso in gasso.all_iso:
                 isomol = getattr(gasso, iso)
                 print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
@@ -518,11 +533,11 @@ class LineOfSight(object):
                 set_abs = []
                 set_emi = []
 
-                print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs, store_in_memory = True)
+                #print('Catulloneeeeeeee')
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True)
                 iso_ab = isomol.ratio
                 for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, ndens):
-                    print(aboo,emoo,ndoo,iso_ab)
+                    #print(aboo,emoo,ndoo,iso_ab)
                     abs_coeff_tot = smm.prepare_spe_grid(wn_range)
                     emi_coeff_tot = smm.prepare_spe_grid(wn_range)
                     abs_coeff_tot.add_to_spectrum(aboo, Strength = iso_ab*ndoo)
@@ -545,7 +560,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -564,7 +579,10 @@ class LineOfSight(object):
             if calc_derivatives:
                 gigi = self.radtran_steps['deriv_factors']
         except:
-            self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set)
+            if radtran_opt is None:
+                self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set)
+            else:
+                self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
 
         spe_zero = smm.prepare_spe_grid(wn_range)
 
@@ -594,8 +612,8 @@ class LineOfSight(object):
                     print('Skippin gas {} {}, no lines found'.format(gas, iso))
                     continue
                 print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
-                print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, cartLUTs = cartLUTs, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS)
+                #print('Catulloneeeeeeee')
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs)
 
                 all_iso_abs[iso] = copy.deepcopy(abs_coeffs)
                 all_iso_emi[iso] = copy.deepcopy(emi_coeffs)
@@ -647,7 +665,7 @@ class LineOfSight(object):
         iso_intensities = dict()
 
         for gas in all_molecs_abs.keys():
-            print('catuuuuusppspsps: ', gas)
+            #print('catuuuuusppspsps: ', gas)
             all_iso_emi = all_molecs_emi[gas]
             all_iso_abs = all_molecs_abs[gas]
             ndens = np.array(self.radtran_steps['ndens'][gas])
@@ -659,10 +677,10 @@ class LineOfSight(object):
                     ret_set = bayes_set.sets[gas]
                     derivfa = self.radtran_steps['deriv_factors'][gas]
                     for par in ret_set.set:
-                        par.add_hires_deriv(spe_zero)
+                        par.add_hires_deriv(spcl.SpectralIntensity(spe_zero.spectrum, spe_zero.spectral_grid))
 
             for iso in all_molecs_abs[gas].keys():
-                print('catuuuuusppspsps: ', iso)
+                #print('catuuuuusppspsps: ', iso)
                 emi_coeffs = all_iso_emi[iso]
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
@@ -731,8 +749,8 @@ class LineOfSight(object):
             print('{} steps remaining'.format(abs_coeff_tot.remaining))
 
             max_depth = np.max(ab_tot.spectrum)*step
-            if(max_depth > 1.):
-                print('Step {} is not optically thin. Max optical depth: {}'.format(ii, max_depth))
+            #if(max_depth > 1.):
+            #    print('Step {} is not optically thin. Max optical depth: {}'.format(ii, max_depth))
             time1 = time.time()
 
             tau = ab_tot*step
@@ -740,7 +758,7 @@ class LineOfSight(object):
             Source = (em*nd*iso_ab)/ab_tot
             Source.spectrum[np.isnan(Source.spectrum)] = 0.0
             Source.spectrum[np.isinf(Source.spectrum)] = 0.0
-            print('Questo è brutto! Cambia mettendo la source alla temp sua, vabbè è bruttino uguale eh..')
+            #print('Questo è brutto! Cambia mettendo la source alla temp sua, vabbè è bruttino uguale eh..')
 
             unomenogama = gama*(-1.0)+1.0
             intensity += unomenogama*Source*Gama_tot
@@ -762,7 +780,7 @@ class LineOfSight(object):
                     pezzo2 = Source*unomenogama*Gama_strange[par.key]
                     pezzo3 = deSdeq*unomenogama*Gama_tot*deriv_factors[par.key][num]
                     par.hires_deriv += (pezzo1+pezzo2+pezzo3)
-                    print('ssssssssssssssssssssssss {} -> {}'.format(num, par.hires_deriv.max()))
+                    #print('ssssssssssssssssssssssss {} -> {}'.format(num, par.hires_deriv.max()))
                     Gama_strange[par.key] = Gama_strange[par.key]*gama + degamadeq*Gama_tot*deriv_factors[par.key][num]
                     if par is ret_set.set[-1]:
                         pl.figure(17)
@@ -825,12 +843,12 @@ class LineOfSight(object):
         # 3 - La LOS non interseca mai la shell. Not found.
         """
 
-        print('Starting from: {}'.format(point))
+        # print('Starting from: {}'.format(point))
         try:
             _LOS = self._LOS
         except Exception as cazzillo:
             _LOS = self.calc_LOS_vector()
-            print(cazzillo)
+            #print(cazzillo)
 
         # Look for the closest point to origin.
         min_R = self.get_closest_distance(refraction = refraction)
@@ -880,7 +898,7 @@ class LineOfSight(object):
             _LOS = self._LOS
         except Exception as cazzillo:
             _LOS = self.calc_LOS_vector()
-            print(cazzillo)
+            #print(cazzillo)
 
         if not refraction:
             t_point = tangent_point(_LOS, self.starting_point.Cartesian(), point = point_0)
@@ -1059,12 +1077,12 @@ def orthogonal_plane(vector, point):
     line = normalize(vector)
 
     if line[2] != 0:
-        print('Returning plane as function of (x,y) couples')
+        #print('Returning plane as function of (x,y) couples')
         def plane(x,y):
             z = point[2] - ( line[0]*(x-point[0]) + line[1]*(y-point[1]) ) / line[2]
             return np.array([x,y,z])
     else:
-        print('Returning plane as function of (x,z) couples')
+        #print('Returning plane as function of (x,z) couples')
         def plane(x,z):
             y = point[1] - line[0] * (x-point[0]) / line[1]
             return np.array([x,y,z])
@@ -1247,15 +1265,33 @@ class Pixel(object):
         print(point.Spherical())
         return point
 
-    def LOS(self, verbose = False):
+    def LOS(self, verbose = False, delta_ang = None, rot_plane_ang = None):
         spacecraft = self.spacecraft()
         second = self.limb_tg_point()
 
-        linea1 = LineOfSight(spacecraft, second)
+        linea1 = LineOfSight(spacecraft, second, delta_ang = delta_ang, rot_plane_ang = rot_plane_ang)
         if verbose:
             linea1.details()
 
         return linea1
+
+
+class VIMSPixel(Pixel):
+    """
+    Some features specific to VIMS observations (FOV, wl windows)
+    """
+    def __init__(self, *args, **kwargs):
+        Pixel.__init__(self, *args, **kwargs)
+        # VIMS stuff
+        self.FOV_angle_up = 0.5*1.e-3 # rad
+        self.FOV_angle_down = -0.5*1.e-3 # rad
+        return
+
+    def low_LOS(self, verbose = False):
+        return self.LOS(delta_ang = self.FOV_angle_down, verbose = verbose)
+
+    def up_LOS(self, verbose = False):
+        return self.LOS(delta_ang = self.FOV_angle_up, verbose = verbose)
 
 
 class PixelSet(np.ndarray):
@@ -1480,7 +1516,7 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
     if mol > 47:
         raise ValueError('There are only 47 molecs here.')
 
-    print('Looking for mol {}, iso {}'.format(mol,iso))
+    #print('Looking for mol {}, iso {}'.format(mol,iso))
     resu = dict()
 
     infile = open(filename,'r')
@@ -1494,7 +1530,7 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
     if linea_ok[0] == '#':
         raise ValueError('Iso not found.. you sure?')
 
-    print(linea_ok)
+    #print(linea_ok)
     resu['iso_name'] = linea_ok[0]
     resu['iso_ratio'] = float(linea_ok[1])
     resu['iso_MM'] = float(linea_ok[4])
@@ -2016,7 +2052,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid != other.grid.grid:
+            if self.grid.grid.shape != other.grid.grid.shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)+getattr(other, profname2)
@@ -2049,7 +2085,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid != other.grid.grid:
+            if self.grid.grid.shape != other.grid.grid.shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)-getattr(other, profname2)
@@ -2082,7 +2118,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid != other.grid.grid:
+            if self.grid.grid.shape != other.grid.grid.shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)*getattr(other, profname2)
@@ -2115,7 +2151,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid != other.grid.grid:
+            if self.grid.grid.shape != other.grid.grid.shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)/getattr(other, profname2)
@@ -2133,91 +2169,6 @@ class AtmProfile(object):
                 for nam in self.names[1:]:
                     prof = getattr(self, nam)/other
                     profnew.add_profile(prof, nam, self.interp[nam])
-
-        return profnew
-
-
-
-    def __sub__(self, other, profname1 = None, profname2 = None, new_profname = None):
-        """
-        Sums two profiles. Just if they are the same.
-        """
-        if profname1 is None:
-            if len(self.names) > 1:
-                raise ValueError('profname1 not defined. which profile do I have to sum?')
-            else:
-                profname1 = self.names[0]
-
-        if profname2 is None:
-            if len(other.names) > 1:
-                raise ValueError('profname2 not defined. which profile do I have to sum?')
-            else:
-                profname2 = other.names[0]
-
-        if new_profname is None:
-            new_profname = profname1
-
-        if self.grid.grid != other.grid.grid:
-            raise ValueError('Cannot sum two profiles with different grids.')
-        else:
-            prof = getattr(self, profname1)-getattr(other, profname2)
-            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
-
-        return profnew
-
-
-    def __mul__(self, other, profname1 = None, profname2 = None, new_profname = None):
-        """
-        Sums two profiles. Just if they are the same.
-        """
-        if profname1 is None:
-            if len(self.names) > 1:
-                raise ValueError('profname1 not defined. which profile do I have to sum?')
-            else:
-                profname1 = self.names[0]
-
-        if profname2 is None:
-            if len(other.names) > 1:
-                raise ValueError('profname2 not defined. which profile do I have to sum?')
-            else:
-                profname2 = other.names[0]
-
-        if new_profname is None:
-            new_profname = profname1
-
-        if self.grid.grid != other.grid.grid:
-            raise ValueError('Cannot sum two profiles with different grids.')
-        else:
-            prof = getattr(self, profname1)*getattr(other, profname2)
-            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
-
-        return profnew
-
-
-    def __div__(self, other, profname1 = None, profname2 = None, new_profname = None):
-        """
-        Sums two profiles. Just if they are the same.
-        """
-        if profname1 is None:
-            if len(self.names) > 1:
-                raise ValueError('profname1 not defined. which profile do I have to sum?')
-            else:
-                profname1 = self.names[0]
-
-        if profname2 is None:
-            if len(other.names) > 1:
-                raise ValueError('profname2 not defined. which profile do I have to sum?')
-            else:
-                profname2 = other.names[0]
-
-        if new_profname is None:
-            new_profname = profname1
-
-        if self.grid.grid != other.grid.grid:
-            raise ValueError('Cannot sum two profiles with different grids.')
-        else:
-            prof = getattr(self, profname1)/getattr(other, profname2)
-            profnew = AtmProfile(self.grid, prof, new_profname, self.interp[profname])
 
         return profnew
 
@@ -2803,11 +2754,12 @@ def read_obs(filename):
     trova_spip(infile)
     data = [line.split() for line in infile]
     data_arr = np.array(data)
-    freq = [float(r) for r in data_arr[:, 0]]
+    freq = np.array([float(r) for r in data_arr[:, 0]])
     obs = data_arr[:, 1:2*n_limb+2:2]
     obs = obs.astype(float)
     flags = data_arr[:, 2:2*n_limb+2:2]
     flags = flags.astype(int)
+
     infile.close()
     return n_freq, n_limb, dists, alts, freq, obs, flags
 
@@ -3778,7 +3730,7 @@ def freqTOwl(freq,spe_freq,wl,fwhm):
     return spe
 
 
-def read_bands(filename):
+def read_bands(filename, wn_range = None):
     """
     Reads bands and ILS fwhm of VIMS observations. (gbb_2015 format)
     :param filename:
@@ -3788,12 +3740,41 @@ def read_bands(filename):
     trova_spip(infile)
     data = [line.split() for line in infile]
     data_arr = np.array(data)
-    wl = [float(r) for r in data_arr[:, 0]]
-    fwhm = [float(r) for r in data_arr[:, 2]]
+    wl = np.array([float(r) for r in data_arr[:, 0]])
+    sig = np.array([float(r) for r in data_arr[:, 3]])
+    if wn_range is not None:
+        cond = (wl >= wn_range[0]) & (wl <= wn_range[1])
+        wl = wl[cond]
+        sig = sig[cond]
     infile.close()
 
-    return wl, fwhm
+    spgri = spcl.SpectralGrid(wl)
+    bands = spcl.SpectralObject(sig, spgri)
 
+    return bands
+
+def read_noise(filename, wn_range = None):
+    """
+    Reads noise of VIMS observations. (gbb_2015 format)
+    :param filename:
+    :return:
+    """
+    infile = open(filename, 'r')
+    trova_spip(infile)
+    data = [line.split() for line in infile]
+    data_arr = np.array(data)
+    wl = np.array([float(r) for r in data_arr[:, 0]])
+    err = np.array([float(r) for r in data_arr[:, 1]])
+    if wn_range is not None:
+        cond = (wl >= wn_range[0]) & (wl <= wn_range[1])
+        wl = wl[cond]
+        err = err[cond]
+    infile.close()
+
+    spgri = spcl.SpectralGrid(np.array(wl))
+    err = spcl.SpectralObject(np.array(err), spgri)
+
+    return err
 
 def findcol(n,i, color_map = 5):
     """
