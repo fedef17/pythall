@@ -1288,10 +1288,15 @@ class VIMSPixel(Pixel):
         return
 
     def low_LOS(self, verbose = False):
-        return self.LOS(delta_ang = self.FOV_angle_down, verbose = verbose)
+        """
+        Assuming pixel rotation, with approx.: the vertex of the FOV square, the center of the FOV and the planet center lie on the same line.
+        """
+        dmax = self.FOV_angle_down*np.sqrt(2.)*np.cos(np.pi/4.-self.pixel_rot)
+        return self.LOS(delta_ang = dmax, verbose = verbose)
 
     def up_LOS(self, verbose = False):
-        return self.LOS(delta_ang = self.FOV_angle_up, verbose = verbose)
+        dmax = self.FOV_angle_up*np.sqrt(2.)*np.cos(np.pi/4.-self.pixel_rot)
+        return self.LOS(delta_ang = dmax, verbose = verbose)
 
 
 class PixelSet(np.ndarray):
