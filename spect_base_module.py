@@ -42,6 +42,9 @@ def check_free_space(cart, threshold = 0.05):
     return fract
 
 
+def isclose(a,b):
+    return np.isclose(a, b, rtol=1e-09, atol=0.0, equal_nan=False)
+
 #####################################################################################################################
 #####################################################################################################################
 ###############################             FUNZIONI                 ################################################
@@ -504,6 +507,11 @@ class LineOfSight(object):
     def calc_optical_depth(self, wn_range, planet, lines, step = None, cartLUTs = None):
         """
         Calculates the optical depth along the LOS.
+
+
+        DEPRECATED: does not work, changed too much stuff
+
+
         """
 
         abs_opt_depth = smm.prepare_spe_grid(wn_range)
@@ -1352,7 +1360,7 @@ class Molec(object):
         self.all_iso = []
         return
 
-    def add_all_iso_from_HITRAN(self, lines = None, add_levels = True, custom_iso_ratios = None, n_max = None):
+    def add_all_iso_from_HITRAN(self, lines = None, add_levels = False, custom_iso_ratios = None, n_max = None):
         """
         Creates and adds to Molec all isotopologues in HITRAN. The ones already added manually remain there. custom_iso_ratios is intended from the first isotopologue to be added.
         """
@@ -3346,6 +3354,9 @@ def read_input_atm_man(filename):
 def add_nLTE_molecs_from_tvibmanuel(planet, filename, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
     """
     Returns a set of molecs with the correct levels and tvibs.
+    @@@ Note
+    works only in 1D (1D atm and 1D T_kin) if interested in T_kin, should be fixed
+    if not interested in T_kin works in multidim
     """
     alts, mol_names, levels, energies, vib_ok = read_tvib_manuel(filename, n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
 
