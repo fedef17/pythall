@@ -164,12 +164,10 @@ class LineOfSight(object):
 
         return
 
-    def calc_along_LOS(self, atmosphere, profname = None, curgod = False, set_attr = False, set_attr_name = None):
+    def calc_along_LOS(self, atmosphere, planet = None, profname = None, curgod = False, set_attr = False, set_attr_name = None):
         """
         Returns a vector with prof values on the LOS.
-        ###################### WIPPPPPP
-        CURGOD TO BE INTRODUCED
-        method available: simple, curgod
+        planet is needed if intersections have to be calculated.
         """
 
         if profname is None:
@@ -2300,8 +2298,14 @@ class AtmGridMask(AtmProfile):
 
         return numask
 
-#class Atmosphere(AtmProfile):
 
+class LatSzaAltProf(AtmGrid):
+    """
+    """
+    def __init__(self, lats, szas, alts, profile, profname, interp):
+        grid = AtmGrid(['lat','sza','alt'], [lats, szas, alts])
+        AtmProfile.__init__(self, grid, T_vibs, profname, interp)
+        return
 
 class PT_atm_AltLat(AtmProfile):
     """
@@ -3349,6 +3353,75 @@ def read_input_atm_man(filename):
     temp = np.array(prof)
 
     return alts, temp, pres
+
+
+def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
+    """
+    Returns a set of molecs with the correct levels and tvibs.
+    @@@ Note
+    works only in 1D (1D atm and 1D T_kin) if interested in T_kin, should be fixed
+    if not interested in T_kin works in multidim
+    """
+
+    sets = os.listdir(cart_tvibs)
+    lats = [lin.split('_')[5] for lin in sets]
+    szas = [lin.split('_')[6] for lin in sets]
+    alts, mol_names, levels, energies, vib_ok = read_tvib_manuel(cart_tvibs+sets[0], n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+
+
+    print('incomplete!')
+    sys.exit()
+    # favavavavavv
+
+    #class Atmosphere(AtmProfile):
+    #vt_ch4__048_2006-07_clima2_67.5s_90.0_Cas_Voy_v3_v10_0062vt_ch4__048_2006-07_clima2_67.5s_90.0_Cas_Voy_v3_v10_0062
+
+
+    molecs = dict()
+    T_kin = planet.atmosphere.temp
+    alt_grid = AtmGrid('alt', planet.atmosphere.grid.coords['alt'])
+    T_kin = AtmProfile(alt_grid, T_kin, 'vibtemp', 'lin')
+
+    for molcoso, lev, ene, vib in zip(mol_names, levels, energies, vib_ok):
+        mol = int(molcoso[:-1])
+        iso = int(molcoso[-1])
+
+        info = find_molec_metadata(mol, iso)
+
+        try:
+            molec = molecs[info['mol_name']]
+        except:
+            molecs[info['mol_name']] = Molec(mol, name = info['mol_name'])
+            molec = molecs[info['mol_name']]
+
+        striso = 'iso_{:1d}'.format(iso)
+
+        try:
+            isomol = getattr(molec, striso)
+        except:
+            molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
+            isomol = getattr(molec, striso)
+
+            # add_fundamental
+            if add_fundamental:
+                minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
+                lev_0 = ''
+                for lett in minstr:
+                    try:
+                        num = int(lett)
+                        lev_0 += '0'
+                    except:
+                        lev_0 += lett
+                isomol.add_level(lev_0, 0.0, vibtemp = T_kin)
+
+        isomol.add_level(lev, ene, vibtemp = vib)
+
+    if linee is not None:
+        for molec in molecs.values():
+            for iso in molec.all_iso:
+                getattr(molec, iso).add_simmetries_levels(linee)
+
+    return molecs
 
 
 def add_nLTE_molecs_from_tvibmanuel(planet, filename, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
