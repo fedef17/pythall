@@ -183,21 +183,27 @@ class LineOfSight(object):
             points = self.calc_atm_intersections(planet)
 
         quant = []
+        for point, nn in zip(points, range(len(points))):
+            atmpoint = []
+            for nam in atmosphere.grid.names():
+                if nam == 'alt':
+                    atmpoint.append(point.Spherical()[2])
+                elif nam == 'lat':
+                    atmpoint.append(point.Spherical()[0])
+                elif nam == 'lon':
+                    atmpoint.append(point.Spherical()[1])
+                elif nam == 'sza':
+                    atmpoint.append(self.szas[nn])
 
-        # for point1,point2 in zip(points[:-1],points[1:]):
-        #     point = Coords((point1.Cartesian()+point2.Cartesian())/2)
-        #     quant.append(atmosphere.calc(point.Spherical()[2],profname))
-        #     if curgod:
-        #         print('Not yet available! Doing simple interpolation..')
-        for point in points:
-            quant.append(atmosphere.calc(point.Spherical()[2],profname))
+            quant.append(atmosphere.calc(atmpoint, profname))
+        # for point, nn in zip(points, range(len(points))):
+            # quant.append(atmosphere.calc(point.Spherical()[2],profname))
 
-        #print('PUPPAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ---- questo va riscrittooooooooooooo osososooso sooooo: non è generalizzato per profilo a più dimensioni tipo lat lon alt')
         if set_attr:
             if set_attr_name is None:
                 set_attr_name = profname
             self.atm_quantities[set_attr_name] = np.array(quant)
-            if 'temp' in self.atm_quantities.keys() and 'pres' in self.atm_quantities.keys():
+            if 'temp' in self.atm_quantities.keys() and 'pres' in self.atm_quantities.keys() and not 'ndens' in self.atm_quantities.keys():
                 self.atm_quantities['ndens'] = num_density(self.atm_quantities['pres'], self.atm_quantities['temp'])
 
         return np.array(quant)
@@ -1185,7 +1191,7 @@ class Planet(object):
 
 class Titan(Planet):
     def __init__(self):
-        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1000., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
+        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1500., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
 
         return
 
@@ -1592,6 +1598,16 @@ class IsoMolec(object):
                     levvo.add_simmetries(simm)
         return
 
+    def has_level(self, lev_str):
+        ce = []
+        for lev in self.levels:
+            levvo = getattr(self, lev)
+            ce.append(levvo.equiv(lev_str))
+
+        if np.any(ce):
+            return True, np.array(self.levels)[ce][0]
+        else:
+            return False, None
 
     def add_levels(self, lev_strings, energies, vibtemps = None, degeneracies = None, simmetries = None, add_fundamental = False, T_kin = None):
         """
@@ -1754,8 +1770,12 @@ class Level(object):
         """
         Returns true if string_lev has the same quanta of Level. If check_simmetry is set to True, returns True only if also the simmetry is the same.
         """
-        minst, vibq, oth = extract_quanta_HITRAN(self.mol, self.iso, self.simmetry[0])
-        minst2, vibq2, oth2 = extract_quanta_HITRAN(self.mol, self.iso, string_lev)
+        if check_minor_numbers:
+            minst, vibq, oth = extract_quanta_HITRAN(self.mol, self.iso, self.simmetry[0])
+            minst2, vibq2, oth2 = extract_quanta_HITRAN(self.mol, self.iso, string_lev)
+        else:
+            minst = self.minimal_level_string()
+            minst2 = minimal_level_string(self.mol, self.iso, string_lev)
 
         equiv = False
         if minst == minst2:
@@ -1838,10 +1858,26 @@ class AtmGrid(object):
         if len(coord_names) == 1:
             self.grid = np.array(coord_points_list)
         else:
-            cos = np.meshgrid(*coord_points_list)
+            # THere's a bug in np.meshgrid. The first two dimensions has to be inverted to have the desired order.
+            coordok = []
+            coordok.append(coord_points_list[1])
+            coordok.append(coord_points_list[0])
+            try:
+                coordok += coord_points_list[2:]
+            except:
+                pass
+            cos = np.meshgrid(*coordok)
             cosut = []
-            for coui in cos:
-                cosut.append(np.array(coui.T))
+            cosut.append(cos[1])
+            cosut.append(cos[0])
+            try:
+                for cosollo in cos[2:]:
+                    cosut.append(cosollo)
+            except:
+                pass
+            #for coui in cos:
+            #    cosut.append(np.array(coui.T))
+            #self.grid = cosut
             self.grid = cosut
 
         if hierarchy is None:
@@ -1950,6 +1986,15 @@ class AtmProfile(object):
         nuprof = AtmProfile(self.grid, getattr(self, profname), profname, self.interp[profname])
         return nuprof
 
+    def profile(self):
+        if len(self.names) == 1:
+            return getattr(self, self.names[0])
+        else:
+            profiles = dict()
+            for nam in self.names:
+                profiles[nam] = getattr(self, nam)
+            return profiles
+
     def keys(self):
         return self.names
 
@@ -1967,6 +2012,8 @@ class AtmProfile(object):
         if np.shape(profile) != np.shape(self.grid.grid[0]):
             print('WARNING: profile shape is different! Trying to invert the order')
             print(np.shape(profile), self.grid.grid[0].shape)
+            print(self.grid.order())
+            print(self.grid.grid)
             profile = profile.T
             print(np.shape(profile))
             if np.shape(profile) != np.shape(self.grid.grid[0]):
@@ -1981,7 +2028,7 @@ class AtmProfile(object):
         if type(interp) is str:
             interp = [interp]
         for ino in interp:
-            nam = ['lin','exp','box']
+            nam = ['lin','exp','box','1cos']
             try:
                 nam.index(ino)
             except ValueError:
@@ -2063,7 +2110,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid.shape != other.grid.grid.shape:
+            if self.grid.grid[0].shape != other.grid.grid[0].shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)+getattr(other, profname2)
@@ -2096,7 +2143,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid.shape != other.grid.grid.shape:
+            if self.grid.grid[0].shape != other.grid.grid[0].shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)-getattr(other, profname2)
@@ -2129,7 +2176,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid.shape != other.grid.grid.shape:
+            if self.grid.grid[0].shape != other.grid.grid[0].shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)*getattr(other, profname2)
@@ -2162,7 +2209,7 @@ class AtmProfile(object):
             else:
                 profname2 = profname1
 
-            if self.grid.grid.shape != other.grid.grid.shape:
+            if self.grid.grid[0].shape != other.grid.grid[0].shape:
                 raise ValueError('Cannot sum two profiles with different grids.')
 
             prof = getattr(self, profname1)/getattr(other, profname2)
@@ -2201,6 +2248,7 @@ class AtmProfile(object):
         if len(self.names) == 1 and profname is None:
             profname = self.names[0]
 
+        #print(self.grid.names())
         if profname is not None:
             value = interp(getattr(self,profname), np.array(self.grid.grid), point, itype=self.interp[profname], hierarchy=self.grid.hierarchy)
             return value
@@ -2283,16 +2331,16 @@ class AtmGridMask(AtmProfile):
         Merges two mask with different grids. The mask values are multiplied: mask(mio,tuo) = self.mask(mio)*other.mask(tuo)
         """
         nugrid = self.grid.merge(other.grid)
-        dim1 = self.grid.ndim()
-        dim2 = other.grid.ndim()
+        dim1 = self.grid.ndim
+        dim2 = other.grid.ndim
 
-        nuprof = np.zeros(nugrid[0].shape)
+        nuprof = np.zeros(nugrid.grid[0].shape)
 
-        for point, num in zip(nugrid.points(), len(nuprof.flatten())):
+        for point, num in zip(nugrid.points(), range(len(nuprof.flatten()))):
             indx = np.unravel_index(num, nuprof.shape)
             nuprof[indx] = self.calc(point[:dim1])*other.calc(point[dim1:])
 
-        interp = self.interp['mask']+other.interp['mask']
+        interp = np.array(list(self.interp['mask'])+list(other.interp['mask']))
 
         numask = AtmGridMask(nugrid, nuprof, interp)
 
@@ -2357,12 +2405,14 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     weights = []
     for p, arr, ity in zip(point,grid,itype):
         indx, wei = find_between(np.unique(arr),p,ity)
+        #print(p, arr, ity, indx, wei)
         indxs.append(indx)
         weights.append(wei)
 
     # mi restringo l'array ad uno con solo i valori che mi interessano
     profi = prof
     for i in range(ndim):
+        #print(i, indxs[i], profi.shape)
         profi = profi.take(indxs[i],axis=i)
 
     # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente. profint si restringe passo passo, perde un asse alla volta.
@@ -2380,6 +2430,7 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
 
     profint = profi
     for ax in hiesort_dyn:
+        #print(ax)
         vals = [profint.take(ind,axis=ax) for ind in [0,1]]
         profint = int1d(vals,weights[ax],itype[ax])
         #print('aa',vals,weights[ax],itype[ax])
@@ -2507,7 +2558,7 @@ def find_between(array, value, interp='lin', thres = 1.e-5):
     """
 
     array = np.array(array)
-    if interp == 'lin' or interp == 'exp':
+    if interp == 'lin' or interp == 'exp' or interp == '1cos':
         valo = value
         mino = np.min(array)
         maxo = np.max(array)
@@ -2532,8 +2583,9 @@ def find_between(array, value, interp='lin', thres = 1.e-5):
             weights = np.array(weight(value,vals[0],vals[1],itype=interp))
     elif interp == 'box':
         thres = abs(thres*(array[1]-array[0]))
-        idx1 = np.argwhere(array < value+thres)[-1]
-        idx = [idx1, idx1]
+        idx1 = np.argwhere(array < value+thres)[-1][0]
+        #print(array, value, idx1, idx1[-1])
+        idx = np.array([idx1, idx1])
         weights = [1,0]
 
     return idx, weights
@@ -3354,6 +3406,44 @@ def read_input_atm_man(filename):
 
     return alts, temp, pres
 
+def latstr_manuel_c_to_ex(lat_str):
+    lats = []
+    lat_0 = -90.
+    lats.append(lat_0)
+    lat_str_ord = []
+    lat_str_ord += [-1*float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 's']
+    lat_str_ord += [float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 'e' or strrr[-1] == 'n']
+
+    lat_str_ord = np.sort(lat_str_ord)
+    for lat in lat_str_ord:
+        lats.append(2*lat-lats[-1])
+
+    print(lats[:-1], lats[-1])
+    return lats[:-1], lat_str_ord
+
+def latstr_manuel_conv(lstr):
+    if lstr[-1] == 's':
+        sign = -1
+    else:
+        sign = 1
+    return sign * float(lstr[:-1])
+
+def molstr_manuel(mol, iso):
+    return '{:03d}{:1d}'.format(mol, iso)
+
+def szaform_manuel(sza):
+    if sza < 100:
+        return '{:04.1f}'.format(sza)
+    else:
+        return '{:04.1f}'.format(sza)[:-1]
+
+def latform_manuel(lat):
+    if lat < 0:
+        return '{:04.1f}s'.format(abs(lat))
+    elif lat == 0:
+        return '{:04.1f}e'.format(lat)
+    elif lat > 0:
+        return '{:04.1f}n'.format(lat)
 
 def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
     """
@@ -3364,57 +3454,123 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
     """
 
     sets = os.listdir(cart_tvibs)
-    lats = [lin.split('_')[5] for lin in sets]
-    szas = [lin.split('_')[6] for lin in sets]
-    alts, mol_names, levels, energies, vib_ok = read_tvib_manuel(cart_tvibs+sets[0], n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+    sets = [se for se in sets if se[:2] == 'vt']
+    print(sets[0].split('_'))
+    lat_str = [lin.split('_')[6] for lin in sets]
+    lat_str = np.unique(lat_str)
+    sza_str = [lin.split('_')[7] for lin in sets]
+    sza_str = np.unique(sza_str)
+    print(lat_str, sza_str)
+
+    lats, lat_c = latstr_manuel_c_to_ex(lat_str)
+    szas = np.sort(map(float, sza_str))
+
+    mols = np.unique([lin.split('_')[-1] for lin in sets])
+
+    mol_names = []
+    levels = []
+    vib_ok = []
+    energies = []
+    for moo in mols:
+        fil = [fi for fi in sets if moo in fi][0]
+        alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil, n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+        mol_names += mol_names_p
+        levels += levels_p
+        energies += energies_p
+        vib_ok += vib_ok_p
 
 
-    print('incomplete!')
-    sys.exit()
-    # favavavavavv
+    t_vib_0 = np.zeros([len(lats), len(szas), len(alts)])
+    t_vib = copy.deepcopy(t_vib_0)
+    t_vib_levels = dict()
+    for molnam, lev in zip(mol_names, levels):
+        mol = int(molnam[:-1])
+        iso = int(molnam[-1])
+        t_vib_levels[(mol, iso, lev)] = copy.deepcopy(t_vib_0)
+        print((mol,iso,lev))
 
-    #class Atmosphere(AtmProfile):
-    #vt_ch4__048_2006-07_clima2_67.5s_90.0_Cas_Voy_v3_v10_0062vt_ch4__048_2006-07_clima2_67.5s_90.0_Cas_Voy_v3_v10_0062
+    lsa_grid = AtmGrid(['lat', 'sza', 'alt'], [lats, szas, alts])
 
+    T_kin_2D = planet.atmosphere.temp
+
+    for nsz in range(len(szas)):
+        try:
+            t_vib[:,nsz,:] = T_kin_2D
+        except:
+            t_vib[:,nsz,:] = T_kin_2D.T
+
+    T_kin_zero = AtmProfile(lsa_grid, t_vib, 'vibtemp', ['box','1cos','lin'])
 
     molecs = dict()
-    T_kin = planet.atmosphere.temp
-    alt_grid = AtmGrid('alt', planet.atmosphere.grid.coords['alt'])
-    T_kin = AtmProfile(alt_grid, T_kin, 'vibtemp', 'lin')
 
-    for molcoso, lev, ene, vib in zip(mol_names, levels, energies, vib_ok):
-        mol = int(molcoso[:-1])
-        iso = int(molcoso[-1])
+    for lat, lc, nla in zip(lats, lat_c, range(len(lats))):
+        for sza, nsz in zip(szas, range(len(szas))):
+            print(lat, lc, sza)
+            taglatsza = '_'+latform_manuel(lc)+'_'+szaform_manuel(sza)+'_'
+            latszafiles = [se for se in sets if taglatsza in se]
+            print(taglatsza, len(latszafiles))
 
-        info = find_molec_metadata(mol, iso)
+            mol_names = []
+            levels = []
+            vib_ok = []
+            energies = []
+            for moo in mols:
+                fil = [fi for fi in latszafiles if moo in fi]
+                if len(fil) > 1:
+                    raise ValueError('Problem: more tvib files corresponding to same lat, sza, mol')
+                alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil[0], n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+                mol_names += mol_names_p
+                levels += levels_p
+                energies += energies_p
+                vib_ok += vib_ok_p
 
-        try:
-            molec = molecs[info['mol_name']]
-        except:
-            molecs[info['mol_name']] = Molec(mol, name = info['mol_name'])
-            molec = molecs[info['mol_name']]
+            for molcoso, lev, ene, vib in zip(mol_names, levels, energies, vib_ok):
+                mol = int(molcoso[:-1])
+                iso = int(molcoso[-1])
 
-        striso = 'iso_{:1d}'.format(iso)
+                info = find_molec_metadata(mol, iso)
 
-        try:
-            isomol = getattr(molec, striso)
-        except:
-            molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
-            isomol = getattr(molec, striso)
+                try:
+                    molec = molecs[info['mol_name']]
+                except:
+                    molecs[info['mol_name']] = Molec(mol, name = info['mol_name'])
+                    molec = molecs[info['mol_name']]
 
-            # add_fundamental
-            if add_fundamental:
-                minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
-                lev_0 = ''
-                for lett in minstr:
-                    try:
-                        num = int(lett)
-                        lev_0 += '0'
-                    except:
-                        lev_0 += lett
-                isomol.add_level(lev_0, 0.0, vibtemp = T_kin)
+                striso = 'iso_{:1d}'.format(iso)
 
-        isomol.add_level(lev, ene, vibtemp = vib)
+                try:
+                    isomol = getattr(molec, striso)
+                except:
+                    molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
+                    isomol = getattr(molec, striso)
+
+                t_vib_levels[(mol, iso, lev)][nla, nsz] = vib.vibtemp
+
+                if len(isomol.levels) == 0:
+                    if add_fundamental:
+                        minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
+                        lev_0 = ''
+                        for lett in minstr:
+                            try:
+                                num = int(lett)
+                                lev_0 += '0'
+                            except:
+                                lev_0 += lett
+                        isomol.add_level(lev_0, 0.0, vibtemp = T_kin_zero)
+
+                if not isomol.has_level(lev)[0]:
+                    isomol.add_level(lev, ene)
+
+    for molec in molecs.values():
+        for iso in molec.all_iso:
+            isomol = getattr(molec, iso)
+            for lev in isomol.levels:
+                levvo = getattr(isomol, lev)
+                if levvo.vibtemp is None:
+                    for [mm, ii, leo] in t_vib_levels.keys():
+                        if levvo.mol == mm and levvo.iso == ii and levvo.equiv(leo):
+                            vt = AtmProfile(lsa_grid, t_vib_levels[(mm, ii, leo)], 'vibtemp', ['box','1cos','lin'])
+                            levvo.add_vibtemp(vt)
 
     if linee is not None:
         for molec in molecs.values():
