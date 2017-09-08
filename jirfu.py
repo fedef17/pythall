@@ -18,7 +18,7 @@ import pickle
 import spect_base_module as sbm
 from matplotlib import rcParams
 import matplotlib.cm as cm
-
+from matplotlib.colors import LogNorm
 
 class JirPix(sbm.Pixel):
     """
@@ -323,7 +323,7 @@ def stereoplot(lon,lat,col,nomefi=None,live = False,polo='N',minu=0,maxu=0,title
     vip4y = np.append(vip4y,vip4y[0])
     stat_x = np.append(stat_x,stat_x[0])
     stat_y = np.append(stat_y,stat_y[0])
-    aur_lw = 1.0
+    aur_lw = 2.0
     if aur_model == 'VIP4':
         pl.plot(vip4x,vip4y,color='white',linewidth=aur_lw)
         pl.plot(vip4x,vip4y,color='black',linewidth=aur_lw,linestyle='--')
@@ -688,7 +688,7 @@ def stereomap2(lon,lat,col,nomefi=None,polo='N',proj = 'orto', minu=0, maxu=0, t
     vip4y = np.append(vip4y,vip4y[0])
     stat_x = np.append(stat_x,stat_x[0])
     stat_y = np.append(stat_y,stat_y[0])
-    aur_lw=1.0
+    aur_lw=2.0
     if aur_model == 'VIP4':
         pl.plot(vip4x,vip4y,color='white',linewidth=aur_lw)
         pl.plot(vip4x,vip4y,color='black',linewidth=aur_lw,linestyle='--')

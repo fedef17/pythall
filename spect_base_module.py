@@ -30,9 +30,9 @@ c_R = 8.31446 # J K-1 mol-1
 c_G = 6.67408e-11 # m3 kg-1 s-2
 kbc = const.k/(const.h*100*const.c) # 0.69503
 
-def check_free_space(cart, threshold = 0.05):
+def check_free_space(cart, threshold = 0.05, verbose = False):
     fract = (1.0*os.statvfs(cart).f_bfree)/os.statvfs(cart).f_blocks
-    print('Still {}% of disk space free'.format(int(fract*100.)))
+    if verbose: print('Still {}% of disk space free'.format(int(fract*100.)))
     if fract < threshold:
         tkMessageBox.showwarning(title = 'aaaaaaaaaaaaahhhhhh', message = "Available disk space is below {}%. Free some space or kill process.".format(int(threshold*100)))
         #top = Tkinter.Tk(title = 'ATTENTION!!!', message = "Available disk space is below {}%. Free some space or kill process.".format(int(threshold*100)))
@@ -317,6 +317,8 @@ class LineOfSight(object):
             self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
             self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
 
+        print('Line of sight tangent at {}'.format(self.tangent_altitude))
+
         tvibs = []
         for gas in planet.gases:
             conc_gas = self.calc_abundance(planet, gas, set_attr = True)
@@ -484,7 +486,7 @@ class LineOfSight(object):
                 opt_depth_step = 0.0
 
         print('Estimated total optical depth: {}'.format(estim_tot_depth))
-        print('total length of LOS: {}'.format(stp_tot))
+        if verbose: print('total length of LOS: {}'.format(stp_tot))
 
         return
 
@@ -572,7 +574,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -591,10 +593,7 @@ class LineOfSight(object):
             if calc_derivatives:
                 gigi = self.radtran_steps['deriv_factors']
         except:
-            if radtran_opt is None:
-                self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set)
-            else:
-                self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
+            self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
 
         spe_zero = smm.prepare_spe_grid(wn_range)
 
@@ -616,14 +615,14 @@ class LineOfSight(object):
 
             all_iso_abs = dict()
             all_iso_emi = dict()
-            print(gasso.all_iso)
+            #print(gasso.all_iso)
             for iso in gasso.all_iso:
                 check_free_space(cartDROP)
                 isomol = getattr(gasso, iso)
                 if len([lin for lin in lines if lin.Mol == isomol.mol and lin.Iso == isomol.iso]) == 0:
                     print('Skippin gas {} {}, no lines found'.format(gas, iso))
                     continue
-                print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
+                if verbose: print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
                 #print('Catulloneeeeeeee')
                 abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs)
 
@@ -719,7 +718,7 @@ class LineOfSight(object):
             return intensity, single_intensities
 
 
-    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None):
+    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False):
         """
         Integrates the formal solution of the radtran equation along the LOS.
         : abs_coeff_tot : the absorption coefficient of all gases in the atmosphere.
@@ -749,16 +748,16 @@ class LineOfSight(object):
             for par in ret_set.set:
                 Gama_strange[par.key] = copy.deepcopy(Zeros)
 
-        print('TOTAL STEPS: {}'.format(abs_coeff_tot.counter))
+        if verbose: print('TOTAL STEPS: {}'.format(abs_coeff_tot.counter))
 
         ii = 0
         for step, nd, num in zip(steps, ndens, range(len(steps))):
-            print(step,nd)
+            if verbose: print(step,nd)
             ii += 1
             ab_tot = abs_coeff_tot.read_one()
             em = emi_coeff_gas.read_one()
             ab = abs_coeff_gas.read_one()
-            print('{} steps remaining'.format(abs_coeff_tot.remaining))
+            if verbose: print('{} steps remaining'.format(abs_coeff_tot.remaining))
 
             max_depth = np.max(ab_tot.spectrum)*step
             #if(max_depth > 1.):
@@ -817,17 +816,16 @@ class LineOfSight(object):
             # pl.figure(44)
             # tau.plot(label = 'Step {}'.format(ii))
             # pl.grid()
-            print('Giro {} finito in {} sec'.format(ii, time.time()-time1))
+            if verbose: print('Giro {} finito in {} sec'.format(ii, time.time()-time1))
 
         # summing the original intensity absorbed by the atmosphere
-        print(type(izero), type(Gama_tot))
         intensity += izero*Gama_tot
 
         if calc_derivatives:
             for par in ret_set.set:
                 par.hires_deriv += izero*Gama_strange[par.key]
 
-        print('Finito radtran in {} s'.format(time.time()-time0))
+        if verbose: print('Finito radtran in {} s'.format(time.time()-time0))
 
         if calc_derivatives:
             return intensity, ret_set
@@ -1190,8 +1188,8 @@ class Planet(object):
 
 
 class Titan(Planet):
-    def __init__(self):
-        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = 1500., is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
+    def __init__(self, atm_extension):
+        Planet.__init__(self,name='Titan', color = 'orange', planet_type = 'Terrestrial', planet_mass = 0.0225, planet_radius = 2575., planet_radii = [2575., 2575.], atm_extension = atm_extension, is_satellite = True, orbiting_planet = 'Saturn', satellite_orbital_period = 15.945, satellite_planet_distance = 1.222e6, rotation_period = 15.945, rotation_axis_inclination = 26.73, revolution_period = 29.4571, planet_star_distance = 9.55)
 
         return
 
@@ -1267,14 +1265,14 @@ class Pixel(object):
 
         return intt
 
-    def spacecraft(self):
+    def spacecraft(self, verbose = False):
         point = Coords([self.sub_obs_lat, self.sub_obs_lon, self.dist],s_ref='Spherical')
-        print(point.Spherical())
+        if verbose: print(point.Spherical())
         return point
 
-    def limb_tg_point(self):
+    def limb_tg_point(self, verbose = False):
         point = Coords([self.limb_tg_lat, self.limb_tg_lon, self.limb_tg_alt],s_ref='Spherical')
-        print(point.Spherical())
+        if verbose: print(point.Spherical())
         return point
 
     def LOS(self, verbose = False, delta_ang = None, rot_plane_ang = None):
@@ -1509,9 +1507,9 @@ def find_levels_isomol_HITRAN(lines, mol, iso):
         energies.append(energy)
         simmetries.append(simmetries_lev)
 
-    print(lev_strings)
-    print(energies)
-    print(simmetries)
+    # print(lev_strings)
+    # print(energies)
+    # print(simmetries)
 
     energies = np.array(energies)
     lev_strings = np.array(lev_strings)
@@ -1593,7 +1591,7 @@ class IsoMolec(object):
         for lev in self.levels:
             levvo = getattr(self, lev)
             for levu, simm in zip(levels, simmetries):
-                print(levu,levvo.minimal_level_string())
+                # print(levu,levvo.minimal_level_string())
                 if levvo.minimal_level_string() == minimal_level_string(self.mol, self.iso, levu):
                     levvo.add_simmetries(simm)
         return
@@ -1620,11 +1618,11 @@ class IsoMolec(object):
             simmetries = len(lev_strings)*[[]]
         if vibtemps is None:
             vibtemps = len(lev_strings)*[None]
-        else:
-            for vit in vibtemps:
-                print(type(vit))
+        # else:
+        #     for vit in vibtemps:
+        #         print(type(vit))
 
-        print(lev_strings)
+        # print(lev_strings)
 
         if add_fundamental:
             minstr = extract_quanta_HITRAN(self.mol, self.iso, lev_strings[0])[0]
@@ -1645,20 +1643,20 @@ class IsoMolec(object):
             else:
                 vibtemps.insert(0, None)
 
-        print(lev_strings)
+        # print(lev_strings)
 
         for levstr,ene,deg,sim,i,vib in zip(lev_strings,energies,degeneracies,simmetries,range(len(lev_strings)),vibtemps):
             print('Level <{}>, energy {} cm-1'.format(levstr,ene))
             stringaa = 'lev_{:02d}'.format(i)
             self.levels.append(stringaa)
             lev = Level(self.mol, self.iso, levstr, ene, degeneracy = deg, simmetry = sim)
-            print('cerca ok qui sotto')
+            #print('cerca ok qui sotto')
             if vib is not None:
-                print('oooook')
+                # print('oooook')
                 lev.add_vibtemp(vib)
-            print(stringaa)
+            # print(stringaa)
             setattr(self,stringaa,copy.deepcopy(lev))
-            print(type(getattr(self,stringaa)))
+            # print(type(getattr(self,stringaa)))
 
             self.n_lev += 1
 
@@ -2696,7 +2694,7 @@ def cbar_things(levels):
     return expo, lab
 
 
-def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', ylim=None, xlim=None, cbarform = '%.1f', live = False):
+def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, cbarform = '%.1f', live = False, cmap = None, extend_lat = False, sci_notation = True):
     """
     Makes lat/alt, lat/time or whichever type of 2D contour maps.
     :param x: X coordinate (n x m matrix)
@@ -2708,6 +2706,11 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     :param cbarlabel: Label for the colorbar. Should contain a {} for exponential in the units, if needed.
     """
 
+    if extend_lat:
+        x = [-90.]+list(x)+[90.]
+        x = np.array(x)
+        quant = np.c_[quant[:,0],quant,quant[:,-1]]
+
     if type(quant) is not np.ma.core.MaskedArray:
         conan = np.isnan(quant)
         quant = np.ma.MaskedArray(quant, conan)
@@ -2716,6 +2719,9 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
         pl.ion()
 
     fig = pl.figure(figsize=(8, 6), dpi=150)
+    print(title)
+    if title is not None:
+        pl.title(title)
 
     #pl.grid()
     pl.xlabel(xlabel)
@@ -2730,10 +2736,12 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
 
     if continuum:
         clevels = np.linspace(levels[0],levels[-1],100)
-        pre = np.linspace(np.min(quant.compressed()), levels[0], 10)
-        post = np.linspace(levels[-1], np.max(quant.compressed()), 10)
-        clevels = np.append(pre[:-1], clevels)
-        clevels = np.append(clevels, post[1:])
+        pre = np.linspace(np.min(quant.compressed()), levels[0], 20)
+        post = np.linspace(levels[-1], np.max(quant.compressed()), 20)
+        if not isclose(np.min(quant.compressed()), levels[0]):
+            clevels = np.append(pre[:-1], clevels)
+        if not isclose(np.max(quant.compressed()), levels[-1]):
+            clevels = np.append(clevels, post[1:])
     else:
         clevels = levels
 
@@ -2744,21 +2752,30 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     # pl.scatter(np.arange(len(clevels)),clevels)
     # pl.show()
 
-    expo, clab = cbar_things(levels)
-    quant = quant/10**expo
-    levels = levels/10**expo
-    clevels = clevels/10**expo
+    if sci_notation:
+        expo, clab = cbar_things(levels)
+        quant = quant/10**expo
+        levels = levels/10**expo
+        clevels = clevels/10**expo
     print(levels)
 
-    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both')
+    def fmt(x):
+        return '{:.1f}'.format(x)
+
+    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both', cmap = cmap)
     if lines:
         zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
+        pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
 
     # This is the fix for the white lines between contour levels
     for coz in zuf.collections:
         coz.set_edgecolor("face")
     cb = pl.colorbar(mappable = zuf, format=cbarform, pad = 0.1)
-    cb.set_label(cbarlabel.format(clab))
+
+    if sci_notation:
+        cb.set_label(cbarlabel + ' ('+clab+')')
+    else:
+        cb.set_label(cbarlabel)
 
     lol = nomefile.find('.')
     form = nomefile[lol+1:]
@@ -3222,7 +3239,7 @@ def read_mol_levels_HITRAN(filename = None, molec = None):
     while ilin < len(lines):
         line = lines[ilin]
         ilin += 1
-        print(line,len(line))
+        #print(line,len(line))
         nome = line[:9]
         #print(line[9:18])
         gigi = extract_quanta_ch4(line[9:18])[0]
@@ -3235,7 +3252,7 @@ def read_mol_levels_HITRAN(filename = None, molec = None):
         lev_stringa_lui.append(hitran_formatter(quantsim[0],quantsim[1],molec='CH4'))
         for isim in range(n_simm-1):
             line = lines[ilin]
-            print(line,len(line))
+            #print(line,len(line))
             quantsim = extract_quanta_ch4(line[25:39].rstrip())
             lev_stringa_lui.append(hitran_formatter(quantsim[0],quantsim[1],molec='CH4'))
             ilin += 1
@@ -3445,7 +3462,7 @@ def latform_manuel(lat):
     elif lat > 0:
         return '{:04.1f}n'.format(lat)
 
-def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None):
+def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None, formato = ''):
     """
     Returns a set of molecs with the correct levels and tvibs.
     @@@ Note
@@ -3455,15 +3472,18 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
 
     sets = os.listdir(cart_tvibs)
     sets = [se for se in sets if se[:2] == 'vt']
-    print(sets[0].split('_'))
-    lat_str = [lin.split('_')[6] for lin in sets]
-    lat_str = np.unique(lat_str)
-    sza_str = [lin.split('_')[7] for lin in sets]
-    sza_str = np.unique(sza_str)
-    print(lat_str, sza_str)
+    if formato == 'Maya':
+        print(sets[0].split('_'))
+        lat_str = [lin.split('_')[6] for lin in sets]
+        lat_str = np.unique(lat_str)
+        sza_str = [lin.split('_')[7] for lin in sets]
+        sza_str = np.unique(sza_str)
+        print(lat_str, sza_str)
 
-    lats, lat_c = latstr_manuel_c_to_ex(lat_str)
-    szas = np.sort(map(float, sza_str))
+        lats, lat_c = latstr_manuel_c_to_ex(lat_str)
+        szas = np.sort(map(float, sza_str))
+    elif formato == 'Manuel':
+        pass
 
     mols = np.unique([lin.split('_')[-1] for lin in sets])
 
