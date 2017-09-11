@@ -579,6 +579,7 @@ class LineOfSight(object):
         Calculates the radtran along the LOS. step in km.
         """
 
+        time0 = time.time()
         if tagLOS is None:
             tagLOS = 'LOS'
 
@@ -594,6 +595,9 @@ class LineOfSight(object):
                 gigi = self.radtran_steps['deriv_factors']
         except:
             self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
+
+        print('     -   radtran steps time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
 
         spe_zero = smm.prepare_spe_grid(wn_range)
 
@@ -634,6 +638,9 @@ class LineOfSight(object):
 
         # CALCULATING TOTAL ABS AND emi
 
+        print('     -   reading and calc abscoeffs time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
+
         abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+tagLOS+'.pic')
         emi_coeff_tot = smm.AbsSetLOS(cartDROP+'emicoeff_tot_'+tagLOS+'.pic')
         abs_coeff_tot.prepare_export()
@@ -671,6 +678,9 @@ class LineOfSight(object):
         abs_coeff_tot.finalize_IO()
         emi_coeff_tot.finalize_IO()
 
+        print('     -   calc total abscoeff time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
+
         steps = self.radtran_steps['step']
         single_intensities = dict()
         iso_intensities = dict()
@@ -707,6 +717,9 @@ class LineOfSight(object):
 
                 iso_intensities[iso] = copy.deepcopy(intens)
             single_intensities[gas] = copy.deepcopy(iso_intensities)
+
+        print('     -   radtrans time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
 
         for gas in all_molecs_abs.keys():
             for iso in all_molecs_abs[gas].keys():
@@ -1293,19 +1306,21 @@ class VIMSPixel(Pixel):
     def __init__(self, *args, **kwargs):
         Pixel.__init__(self, *args, **kwargs)
         # VIMS stuff
-        self.FOV_angle_up = 0.5*1.e-3 # rad
-        self.FOV_angle_down = -0.5*1.e-3 # rad
+        self.FOV_angle_up = 0.25*1.e-3 # rad
+        self.FOV_angle_down = -0.25*1.e-3 # rad
         return
 
     def low_LOS(self, verbose = False):
         """
         Assuming pixel rotation, with approx.: the vertex of the FOV square, the center of the FOV and the planet center lie on the same line.
         """
-        dmax = self.FOV_angle_down*np.sqrt(2.)*np.cos(np.pi/4.-self.pixel_rot)
+        pixel_rot = rad(self.pixel_rot)
+        dmax = self.FOV_angle_down*np.sqrt(2.)*np.cos(np.pi/4.-abs(pixel_rot))
         return self.LOS(delta_ang = dmax, verbose = verbose)
 
     def up_LOS(self, verbose = False):
-        dmax = self.FOV_angle_up*np.sqrt(2.)*np.cos(np.pi/4.-self.pixel_rot)
+        pixel_rot = rad(self.pixel_rot)
+        dmax = self.FOV_angle_up*np.sqrt(2.)*np.cos(np.pi/4.-abs(pixel_rot))
         return self.LOS(delta_ang = dmax, verbose = verbose)
 
 
