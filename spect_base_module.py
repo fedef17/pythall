@@ -320,7 +320,7 @@ class LineOfSight(object):
             self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
             self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
 
-        print('     -        part 1: {:5.1f} min'.format((time.time()-time0)))
+        print('     -        part 1: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         print('Line of sight tangent at {}'.format(self.tangent_altitude))
@@ -343,7 +343,7 @@ class LineOfSight(object):
         max_temp = np.max(self.atm_quantities['temp'])
 
 
-        print('     -        part 2: {:5.1f} min'.format((time.time()-time0)))
+        print('     -        part 2: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         abs_max = dict()
@@ -368,7 +368,7 @@ class LineOfSight(object):
             peak_val = np.max(shape.spectrum)
             abs_max[mol_name] = peak_val*max(essesss)
 
-        print('     -        part 3: {:5.1f} min'.format((time.time()-time0)))
+        print('     -        part 3: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         # adesso parto con gli step
@@ -407,6 +407,9 @@ class LineOfSight(object):
         cond_names = np.array(['temp','pres','tvib','opt_depth'])
 
         time1 = time.time()
+        p1 = 0.
+        p2 = 0.
+        p3 = 0.
         while not end_LOS:
             num += 1
             point_prev = self.intersections[num-1]
@@ -452,7 +455,7 @@ class LineOfSight(object):
                 raise ValueError('RadStep is thick with 1 step! raise the max_opt_depth threshold or lower the LOS step length..')
 
             if stepping:
-                print('     -        part 4 ciclo p 1: {:5.1f} min'.format((time.time()-time1)))
+                p1 += time.time()-time1
                 time1 = time.time()
                 if verbose: print('stepping {:5d} <-> {:5d} of {:5d}. z0: {:8.3f} zf: {:8.3f}. Op_d: {:8.3f}. Trig: {}.'.format(num_orig, num, len(self.intersections), point_orig.Spherical()[2], point.Spherical()[2], opt_depth_step, cond_names[cond]))
 
@@ -486,7 +489,7 @@ class LineOfSight(object):
                 ndtot = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1])
                 cdtot = ndtot*step
 
-                print('     -        part 4 ciclo p 2: {:5.1f} min'.format((time.time()-time1)))
+                p2 += time.time()-time1
                 time1 = time.time()
 
                 if calc_derivatives:
@@ -505,10 +508,13 @@ class LineOfSight(object):
                 step = 0.0
                 opt_depth_step = 0.0
 
-                print('     -        part 4 ciclo p 3: {:5.1f} min'.format((time.time()-time1)))
+                p3 += time.time()-time1
                 time1 = time.time()
 
-        print('     -        part 4: {:5.1f} min'.format((time.time()-time0)))
+        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p1))
+        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p2))
+        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p3))
+        print('     -        part 4: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         print('Estimated total optical depth: {}'.format(estim_tot_depth))
