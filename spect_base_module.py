@@ -410,6 +410,8 @@ class LineOfSight(object):
         p1 = 0.
         p2 = 0.
         p3 = 0.
+        pclos = 0.
+        pcur = 0.
         while not end_LOS:
             num += 1
             point_prev = self.intersections[num-1]
@@ -479,8 +481,12 @@ class LineOfSight(object):
                         if not isomol.is_in_LTE:
                             for lev in isomol.levels:
                                 levello = getattr(isomol, lev)
+                                timeuu = time.time()
                                 tvi = self.calc_along_LOS(levello.vibtemp)
+                                pclos += time.time()-timeuu
+                                timeuu = time.time()
                                 tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =tvi[num_orig:num+1])
+                                pcur += time.time()-timeuu
                                 try:
                                     levello.local_vibtemp.append(tvi)
                                 except:
@@ -498,8 +504,12 @@ class LineOfSight(object):
                         gas = cos.name
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
+                            timeuu = time.time()
                             masklos = self.calc_along_LOS(par.maskgrid)
+                            pclos += time.time()-timeuu
+                            timeuu = time.time()
                             cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =masklos[num_orig:num+1])
+                            pcur += time.time()-timeuu
                             deriv_set[par.key].append(cdtot*cg_mask)
                             if verbose: print('dssss ', par.key, cg_mask)
 
@@ -512,8 +522,10 @@ class LineOfSight(object):
                 time1 = time.time()
 
         print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p1))
-        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p2))
-        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p3))
+        print('     -        part 4 ciclo p 2: {:5.1f} s'.format(p2))
+        print('     -        part 4 ciclo p 3: {:5.1f} s'.format(p3))
+        print('     -        part 4 ciclo p calc_along_LOS: {:5.1f} s'.format(pclos))
+        print('     -        part 4 ciclo p CurGod_fast: {:5.1f} s'.format(pcur))
         print('     -        part 4: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
