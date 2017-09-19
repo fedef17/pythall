@@ -18,6 +18,7 @@ import spect_main_module as smm
 import spect_classes as spcl
 import operator
 import psutil
+import curgods
 
 import Tkinter
 import tkMessageBox
@@ -400,7 +401,7 @@ class LineOfSight(object):
 
             step_add = point_prev.distance(point, units = 'cm')
             step += step_add
-            abstop = max([abs_max[gas]*self.atm_quantities[gas][num] for gas in planet.gases])
+            abstop = max([abs_max[gas]*self.atm_quantities[[gas,'ndens']][num] for gas in planet.gases])
             opt_depth_step += abstop*step_add
 
             #if verbose: print(num, step, opt_depth_step)
@@ -447,8 +448,9 @@ class LineOfSight(object):
                 self.radtran_steps['max_opt_depth'].append(opt_depth_step)
                 self.radtran_steps['indices'].append([num_orig, num])
                 for gas in planet.gases:
-                    nd,ti = CurGod(self.atm_quantities[gas][num_orig:num+1],self.atm_quantities['temp'][num_orig:num+1])
-                    nd,pi = CurGod(self.atm_quantities[gas][num_orig:num+1],self.atm_quantities['pres'][num_orig:num+1])
+                    nd = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1])
+                    ti = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =self.atm_quantities['temp'][num_orig:num+1])
+                    pi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =self.atm_quantities['pres'][num_orig:num+1], interp = 'exp')
                     self.radtran_steps['ndens'][gas].append(nd)
                     self.radtran_steps['pres'][gas].append(pi)
                     self.radtran_steps['temp'][gas].append(ti)
@@ -460,13 +462,13 @@ class LineOfSight(object):
                             for lev in isomol.levels:
                                 levello = getattr(isomol, lev)
                                 tvi = self.calc_along_LOS(levello.vibtemp)
-                                nd,tvi = CurGod(self.atm_quantities[gas][num_orig:num+1],tvi[num_orig:num+1])
+                                tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =tvi[num_orig:num+1])
                                 try:
                                     levello.local_vibtemp.append(tvi)
                                 except:
                                     levello.add_local_vibtemp(tvi)
 
-                ndtot, _ = CurGod(self.atm_quantities['ndens'][num_orig:num+1], np.ones(num+1-num_orig))
+                ndtot = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1])
                 cdtot = ndtot*step
 
                 if calc_derivatives:
@@ -476,7 +478,7 @@ class LineOfSight(object):
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
                             masklos = self.calc_along_LOS(par.maskgrid)
-                            nd, cg_mask = CurGod(self.atm_quantities[gas][num_orig:num+1], masklos[num_orig:num+1])
+                            cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =masklos[num_orig:num+1])
                             deriv_set[par.key].append(cdtot*cg_mask)
                             if verbose: print('dssss ', par.key, cg_mask)
 
@@ -505,7 +507,8 @@ class LineOfSight(object):
             ndens.append(nd)
 
         if set_attr:
-            self.atm_quantities[gas] = np.array(ndens)
+            self.atm_quantities[[gas,'vmr']] = vmr_gas
+            self.atm_quantities[[gas,'ndens']] = np.array(ndens)
 
         return np.array(ndens)
 
@@ -806,15 +809,15 @@ class LineOfSight(object):
                     par.hires_deriv += (pezzo1+pezzo2+pezzo3)
                     #print('ssssssssssssssssssssssss {} -> {}'.format(num, par.hires_deriv.max()))
                     Gama_strange[par.key] = Gama_strange[par.key]*gama + degamadeq*Gama_tot*deriv_factors[par.key][num]
-                    if par is ret_set.set[-1]:
-                        pl.figure(17)
-                        pezzo1.plot(label = 'step {}'.format(num))
-                        pl.figure(18)
-                        pezzo2.plot(label = 'step {}'.format(num))
-                        pl.figure(19)
-                        pezzo3.plot(label = 'step {}'.format(num))
-                        if iso_ab > 0.5 and debugfile is not None:
-                            pickle.dump([num, pezzo1, pezzo2, pezzo3, Source, unomenogama, degamadeq, Gama_tot, Gama_strange], debugfile)
+                    # if par is ret_set.set[-1]:
+                    #     pl.figure(17)
+                    #     pezzo1.plot(label = 'step {}'.format(num))
+                    #     pl.figure(18)
+                    #     pezzo2.plot(label = 'step {}'.format(num))
+                    #     pl.figure(19)
+                    #     pezzo3.plot(label = 'step {}'.format(num))
+                    #     if iso_ab > 0.5 and debugfile is not None:
+                    #         pickle.dump([num, pezzo1, pezzo2, pezzo3, Source, unomenogama, degamadeq, Gama_tot, Gama_strange], debugfile)
 
             Gama_tot *= gama
 
@@ -988,9 +991,6 @@ def CurGod(ndens, quant, interp = 'lin', x_grid = None):
     """
     from scipy import integrate
 
-    #print('nddd', np.max(ndens), np.min(ndens), ndens)
-    #print('qqqqq', np.max(quant), np.min(quant), quant)
-
     if x_grid is None:
         x_gri = np.linspace(0.,1.,len(ndens))
     else:
@@ -999,9 +999,7 @@ def CurGod(ndens, quant, interp = 'lin', x_grid = None):
     def funz_ndens(x, ndens = ndens, x_gri = x_gri):
         ndi = np.interp(x, x_gri, np.log(ndens))
         ndi = np.exp(ndi)
-        #print('funz_ndens')
-        #print('i1 in', x, ndens, x_gri)
-        #print('i1 out', ndi)
+
         return ndi
 
     def funz_quant_ndens(x, ndens = ndens, quant = quant, x_gri = x_gri, interp = interp):
@@ -1014,47 +1012,78 @@ def CurGod(ndens, quant, interp = 'lin', x_grid = None):
         else:
             raise ValueError('No interp method {}'.format(interp))
 
-        #print('funz_quant_ndens')
-        #print('i2 in', x, ndens, quant, x_gri)
-        #print('i2 out', ndi)
-        #print('i2 out', qui)
         return ndi*qui
 
-    # try:
     CG_nd = integrate.quad(funz_ndens, 0., 1.)[0]
     CG_quant = integrate.quad(funz_quant_ndens, 0., 1.)[0]/CG_nd
-    # except Exception as cazzillo:
-        # print('oooooo')
-        # xi = np.linspace(0.,1.,100000)
-        # pl.ion()
-        # pl.figure(27)
-        # pl.title('ndens')
-        # #pl.yscale('log')
-        # pl.plot(x_gri, ndens)
-        # pl.plot(xi, funz_ndens(xi))
-        # pl.grid()
-        # pl.figure(28)
-        # pl.title('quant')
-        # #if interp == 'exp':
-        # #    pl.yscale('log')
-        # pl.plot(x_gri, quant)
-        # pl.grid()
-        # pl.figure(29)
-        # pl.title('ndi*quant')
-        # #if interp == 'exp':
-        # #    pl.yscale('log')
-        # fu = funz_quant_ndens(xi)
-        # print(np.any(np.isnan(fu)))
-        # print(np.min(fu), np.max(fu))
-        # pl.plot(xi, fu)
-        # pl.grid()
-        # print('vecchioo', CG_quant)
-        # CGr = np.sum(fu)*(xi[1]-xi[0])/CG_nd
-        # print('rozzooo', CGr)
-        # mdens = np.mean(ndens)*np.ones(len(ndens))
-        # CG_quant = integrate.quad(funz_quant_ndens, 0., 1., args = (mdens))[0]/CG_nd
-        # print('nuovooo', CG_quant)
-        # raise cazzillo
+
+    return CG_nd, CG_quant
+
+
+def CurGod_fast(ndens, vmr = None, quantity = None, interp = 'lin', x_grid = None, CG_gas_nd = None):
+    """
+    Curtis-Godson weighted average of atmospheric quantities. lin is linear interpolation, exp is exponential.
+
+    ------>>> if x_grid is None, REGULAR STEPS are assumed! <<<<----
+    """
+    imxstp = 8000 #!!! this value is ok for Titan with 1 km steps.. should be changed for larger atmospheres! e.g. Jupiter
+    if len(ndens) > imxstp:
+        raise ValueError('imxstp = {} is too low for len(ndens) = {}'.format(imxstp, len(ndens)))
+
+    # rescaling x axis btw 0 and 1 (I'm producing average values here, I multiply for the real x steps inside radtran)
+    if x_grid is None:
+        x_gri = np.linspace(0.,1.,len(ndens))
+    else:
+        x_gri = (x_grid-x_grid[0])/(x_grid[-1]-x_grid[0])
+
+
+    n_p = len(ndens)
+    zeros = np.zeros(imxstp-n_p, dtype=float)
+    if vmr is None:
+        # calc average total num density
+        CG_nd = curgods.curgod_fort_1(np.append(ndens,zeros), np.append(x_gri,zeros), n_p)
+        return CG_nd
+    else:
+        if CG_gas_nd is None:
+            # calc average gas num density
+            CG_gas_nd = curgods.curgod_fort_2(np.append(ndens,zeros), np.append(vmr,zeros), np.append(x_gri,zeros), n_p)
+
+        if quantity is None:
+            # return average gas num density
+            return CG_gas_nd
+        else:
+            if interp == 'lin':
+                # quantity is assumed linear with x in each step
+                CG_quant = curgods.curgod_fort_3(np.append(ndens,zeros), np.append(vmr,zeros), np.append(quantity,zeros), np.append(x_gri,zeros), n_p)
+            elif interp == 'exp':
+                # log(quantity) is assumed linear with x in each step
+                CG_quant = curgods.curgod_fort_4(np.append(ndens,zeros), np.append(vmr,zeros), np.append(quantity,zeros), np.append(x_gri,zeros), n_p)
+            else:
+                raise ValueError('interp {} not recognized'.format(interp))
+
+            return CG_quant/CG_gas_nd
+
+
+    def funz_ndens(x, ndens = ndens, x_gri = x_gri):
+        ndi = np.interp(x, x_gri, np.log(ndens))
+        ndi = np.exp(ndi)
+
+        return ndi
+
+    def funz_quant_ndens(x, ndens = ndens, quant = quant, x_gri = x_gri, interp = interp):
+        ndi = funz_ndens(x)
+        if interp == 'lin':
+            qui = np.interp(x, x_gri, quant)
+        elif interp == 'exp':
+            qui = np.interp(x, x_gri, np.log(quant))
+            qui = np.exp(qui)
+        else:
+            raise ValueError('No interp method {}'.format(interp))
+
+        return ndi*qui
+
+    CG_nd = integrate.quad(funz_ndens, 0., 1.)[0]
+    CG_quant = integrate.quad(funz_quant_ndens, 0., 1.)[0]/CG_nd
 
     return CG_nd, CG_quant
 
@@ -3438,20 +3467,28 @@ def read_input_atm_man(filename):
 
     return alts, temp, pres
 
-def latstr_manuel_c_to_ex(lat_str):
-    lats = []
-    lat_0 = -90.
-    lats.append(lat_0)
-    lat_str_ord = []
-    lat_str_ord += [-1*float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 's']
-    lat_str_ord += [float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 'e' or strrr[-1] == 'n']
+def latstr_manuel_c_to_ex(lat_str, formato = ''):
+    if formato == 'Maya':
+        lats = []
+        lat_0 = -90.
+        lats.append(lat_0)
+        lat_str_ord = []
+        lat_str_ord += [-1*float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 's']
+        lat_str_ord += [float(strrr[:-1]) for strrr in lat_str if strrr[-1] == 'e' or strrr[-1] == 'n']
 
-    lat_str_ord = np.sort(lat_str_ord)
-    for lat in lat_str_ord:
-        lats.append(2*lat-lats[-1])
+        lat_str_ord = np.sort(lat_str_ord)
+        for lat in lat_str_ord:
+            lats.append(2*lat-lats[-1])
 
-    print(lats[:-1], lats[-1])
-    return lats[:-1], lat_str_ord
+        print(lats[:-1], lats[-1])
+        return lats[:-1], lat_str_ord
+    elif formato == 'Manuel':
+        lat_str_ord = ['lat{:1d}'.format(ii+1) for ii in range(7)]
+        lats_c = [-82.5, -67.5, -45.0, 0.0, 45.0, 67.5, 82.5]
+        lats = [-90., -75., -60., -30., 30., 60., 75., 90.]
+
+        return lats[:-1], lats_c
+
 
 def latstr_manuel_conv(lstr):
     if lstr[-1] == 's':
@@ -3463,26 +3500,37 @@ def latstr_manuel_conv(lstr):
 def molstr_manuel(mol, iso):
     return '{:03d}{:1d}'.format(mol, iso)
 
-def szaform_manuel(sza):
-    if sza < 100:
-        return '{:04.1f}'.format(sza)
-    else:
-        return '{:04.1f}'.format(sza)[:-1]
+def szaform_manuel(sza, formato = ''):
+    if formato == 'Maya':
+        if sza < 100:
+            return '{:04.1f}'.format(sza)
+        else:
+            return '{:04.1f}'.format(sza)[:-1]
+    elif formato == 'Manuel':
+        return 'sza{:03.0f}'.format(sza)
 
-def latform_manuel(lat):
-    if lat < 0:
-        return '{:04.1f}s'.format(abs(lat))
-    elif lat == 0:
-        return '{:04.1f}e'.format(lat)
-    elif lat > 0:
-        return '{:04.1f}n'.format(lat)
+def latform_manuel(lat, formato = ''):
+    if formato == 'Maya':
+        if lat < 0:
+            return '{:04.1f}s'.format(abs(lat))
+        elif lat == 0:
+            return '{:04.1f}e'.format(lat)
+        elif lat > 0:
+            return '{:04.1f}n'.format(lat)
+    elif formato == 'Manuel':
+        lats = [-82.5, -67.5, -45.0, 0.0, 45.0, 67.5, 82.5]
+        okk = 0
+        for la, ii in zip(lats, range(len(lats))):
+            if isclose(la, lat):
+                okk = ii+1
+                break
+        return 'lat{:1d}'.format(okk)
 
-def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None, formato = ''):
+def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None, formato = '', correct_levstring = False):
     """
     Returns a set of molecs with the correct levels and tvibs.
     @@@ Note
-    works only in 1D (1D atm and 1D T_kin) if interested in T_kin, should be fixed
-    if not interested in T_kin works in multidim
+    works with lat sza alt T_vibs
     """
 
     sets = os.listdir(cart_tvibs)
@@ -3495,10 +3543,27 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
         sza_str = np.unique(sza_str)
         print(lat_str, sza_str)
 
-        lats, lat_c = latstr_manuel_c_to_ex(lat_str)
+        lats, lat_c = latstr_manuel_c_to_ex(lat_str, formato = 'Maya')
         szas = np.sort(map(float, sza_str))
     elif formato == 'Manuel':
-        pass
+        lat_str = [lin.split('_')[4] for lin in sets]
+        lat_str = np.unique(lat_str)
+        sza_str = [lin.split('_')[5][3:] for lin in sets]
+        sza_str = np.unique(sza_str)
+
+        lats, lat_c = latstr_manuel_c_to_ex(lat_str, formato = 'Manuel')
+        szas = np.sort(map(float, sza_str))
+    elif formato == 'Manuel2':
+        lat_str = [lin.split('_')[3] for lin in sets]
+        lat_str = np.unique(lat_str)
+        sza_str = [lin.split('_')[4][3:] for lin in sets]
+        sza_str = np.unique(sza_str)
+
+        lats, lat_c = latstr_manuel_c_to_ex(lat_str, formato = 'Manuel')
+        szas = np.sort(map(float, sza_str))
+        formato = 'Manuel'
+    else:
+        raise ValueError('specifica formato! Maya o Manuel?')
 
     mols = np.unique([lin.split('_')[-1] for lin in sets])
 
@@ -3508,7 +3573,7 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
     energies = []
     for moo in mols:
         fil = [fi for fi in sets if moo in fi][0]
-        alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil, n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+        alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil, n_alt_max = n_alt_max, extend_to_alt = extend_to_alt, correct_levstring = correct_levstring)
         mol_names += mol_names_p
         levels += levels_p
         energies += energies_p
@@ -3537,11 +3602,11 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
     T_kin_zero = AtmProfile(lsa_grid, t_vib, 'vibtemp', ['box','1cos','lin'])
 
     molecs = dict()
-
+    print(lats, szas)
     for lat, lc, nla in zip(lats, lat_c, range(len(lats))):
         for sza, nsz in zip(szas, range(len(szas))):
             print(lat, lc, sza)
-            taglatsza = '_'+latform_manuel(lc)+'_'+szaform_manuel(sza)+'_'
+            taglatsza = '_'+latform_manuel(lc, formato = formato)+'_'+szaform_manuel(sza, formato = formato)+'_'
             latszafiles = [se for se in sets if taglatsza in se]
             print(taglatsza, len(latszafiles))
 
@@ -3550,10 +3615,11 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
             vib_ok = []
             energies = []
             for moo in mols:
+                print(moo)
                 fil = [fi for fi in latszafiles if moo in fi]
                 if len(fil) > 1:
                     raise ValueError('Problem: more tvib files corresponding to same lat, sza, mol')
-                alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil[0], n_alt_max = n_alt_max, extend_to_alt = extend_to_alt)
+                alts, mol_names_p, levels_p, energies_p, vib_ok_p = read_tvib_manuel(cart_tvibs+fil[0], n_alt_max = n_alt_max, extend_to_alt = extend_to_alt, correct_levstring = correct_levstring)
                 mol_names += mol_names_p
                 levels += levels_p
                 energies += energies_p
@@ -3672,7 +3738,7 @@ def add_nLTE_molecs_from_tvibmanuel(planet, filename, n_alt_max = None, linee = 
     return molecs
 
 
-def read_tvib_manuel(filename, n_alt_max = None, extend_to_alt = None):
+def read_tvib_manuel(filename, n_alt_max = None, extend_to_alt = None, correct_levstring = False):
     """
     Reads input atmosphere in manuel standard.
     :param filename:
@@ -3709,6 +3775,12 @@ def read_tvib_manuel(filename, n_alt_max = None, extend_to_alt = None):
         linea = trova_spip(infile,hasha = '$',read_past = True)
         ind_e = linea.index(linea.split()[-1])
         levels.append(linea[0:ind_e].strip())
+        if correct_levstring:
+            coso = [figu for figu in levels[-1]]
+            levels[-1] = ''
+            for co in coso:
+                levels[-1] += ' '+co
+            levels[-1] = levels[-1][1:]
         energies.append(float(linea.split()[-1]))
         molecs.append(infile.readline().rstrip())
         infile.readline()
