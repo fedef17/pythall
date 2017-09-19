@@ -401,7 +401,7 @@ class LineOfSight(object):
 
             step_add = point_prev.distance(point, units = 'cm')
             step += step_add
-            abstop = max([abs_max[gas]*self.atm_quantities[[gas,'ndens']][num] for gas in planet.gases])
+            abstop = max([abs_max[gas]*self.atm_quantities[(gas,'ndens')][num] for gas in planet.gases])
             opt_depth_step += abstop*step_add
 
             #if verbose: print(num, step, opt_depth_step)
@@ -448,9 +448,9 @@ class LineOfSight(object):
                 self.radtran_steps['max_opt_depth'].append(opt_depth_step)
                 self.radtran_steps['indices'].append([num_orig, num])
                 for gas in planet.gases:
-                    nd = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1])
-                    ti = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =self.atm_quantities['temp'][num_orig:num+1])
-                    pi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =self.atm_quantities['pres'][num_orig:num+1], interp = 'exp')
+                    nd = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1])
+                    ti = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =self.atm_quantities['temp'][num_orig:num+1])
+                    pi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =self.atm_quantities['pres'][num_orig:num+1], interp = 'exp')
                     self.radtran_steps['ndens'][gas].append(nd)
                     self.radtran_steps['pres'][gas].append(pi)
                     self.radtran_steps['temp'][gas].append(ti)
@@ -462,7 +462,7 @@ class LineOfSight(object):
                             for lev in isomol.levels:
                                 levello = getattr(isomol, lev)
                                 tvi = self.calc_along_LOS(levello.vibtemp)
-                                tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =tvi[num_orig:num+1])
+                                tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =tvi[num_orig:num+1])
                                 try:
                                     levello.local_vibtemp.append(tvi)
                                 except:
@@ -478,7 +478,7 @@ class LineOfSight(object):
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
                             masklos = self.calc_along_LOS(par.maskgrid)
-                            cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[[gas,'vmr']][num_orig:num+1], quantity =masklos[num_orig:num+1])
+                            cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =masklos[num_orig:num+1])
                             deriv_set[par.key].append(cdtot*cg_mask)
                             if verbose: print('dssss ', par.key, cg_mask)
 
@@ -507,8 +507,8 @@ class LineOfSight(object):
             ndens.append(nd)
 
         if set_attr:
-            self.atm_quantities[[gas,'vmr']] = vmr_gas
-            self.atm_quantities[[gas,'ndens']] = np.array(ndens)
+            self.atm_quantities[(gas,'vmr')] = vmr_gas
+            self.atm_quantities[(gas,'ndens')] = np.array(ndens)
 
         return np.array(ndens)
 
