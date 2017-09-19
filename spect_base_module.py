@@ -386,17 +386,28 @@ class LineOfSight(object):
         self.radtran_steps['pres'] = dict()
         self.radtran_steps['ndens'] = dict()
 
+        los_vibtemps = dict()
         for gas in planet.gases:
             self.radtran_steps['ndens'][gas] = []
             self.radtran_steps['temp'][gas] = []
             self.radtran_steps['pres'][gas] = []
 
+            gasso = planet.gases[gas]
+            for iso in gasso.all_iso:
+                isomol = getattr(gasso, iso)
+                if not isomol.is_in_LTE:
+                    for lev in isomol.levels:
+                        levello = getattr(isomol, lev)
+                        los_vibtemps[(gas,iso,lev)] = self.calc_along_LOS(levello.vibtemp)
+
+        los_maskgrids = dict()
         if calc_derivatives:
             self.radtran_steps['deriv_factors'] = dict()
             for cos in bayes_set.sets.values():
                 self.radtran_steps['deriv_factors'][cos.name] = dict()
                 for par in cos.set:
                     self.radtran_steps['deriv_factors'][cos.name][par.key] = []
+                    los_maskgrids[(cos.name,par.key)] = self.calc_along_LOS(par.maskgrid)
 
         end_LOS = False
         num = 0
@@ -482,10 +493,10 @@ class LineOfSight(object):
                             for lev in isomol.levels:
                                 levello = getattr(isomol, lev)
                                 timeuu = time.time()
-                                tvi = self.calc_along_LOS(levello.vibtemp)
+                                tvi = los_vibtemps[(gas,iso,lev)]
                                 pclos += time.time()-timeuu
                                 timeuu = time.time()
-                                tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =tvi[num_orig:num+1])
+                                tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = tvi[num_orig:num+1])
                                 pcur += time.time()-timeuu
                                 try:
                                     levello.local_vibtemp.append(tvi)
@@ -505,10 +516,10 @@ class LineOfSight(object):
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
                             timeuu = time.time()
-                            masklos = self.calc_along_LOS(par.maskgrid)
+                            masklos = los_maskgrids[(cos.name,par.key)]
                             pclos += time.time()-timeuu
                             timeuu = time.time()
-                            cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity =masklos[num_orig:num+1])
+                            cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = masklos[num_orig:num+1])
                             pcur += time.time()-timeuu
                             deriv_set[par.key].append(cdtot*cg_mask)
                             if verbose: print('dssss ', par.key, cg_mask)
