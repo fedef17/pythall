@@ -368,8 +368,6 @@ class LineOfSight(object):
             peak_val = np.max(shape.spectrum)
             abs_max[mol_name] = peak_val*max(essesss)
 
-        print('     -        part 3: {:5.1f} s'.format((time.time()-time0)))
-        time0 = time.time()
 
         # adesso parto con gli step
         opt_depth_step = 0.0
@@ -397,6 +395,7 @@ class LineOfSight(object):
                 isomol = getattr(gasso, iso)
                 if not isomol.is_in_LTE:
                     for lev in isomol.levels:
+                        print('calc los vibt {} {}'.format(iso,lev))
                         levello = getattr(isomol, lev)
                         los_vibtemps[(gas,iso,lev)] = self.calc_along_LOS(levello.vibtemp)
 
@@ -411,6 +410,9 @@ class LineOfSight(object):
 
         end_LOS = False
         num = 0
+
+        print('     -        part 3: {:5.1f} s'.format((time.time()-time0)))
+        time0 = time.time()
 
         stp_tot = 0.0
         estim_tot_depth = 0.0
