@@ -1523,6 +1523,65 @@ class Molec(object):
 
         return True
 
+    def del_iso(self, isotag):
+        delattr(self, isotag)
+        self.all_iso.remove(isotag)
+        self.n_iso -= 1
+
+        return
+
+    def add_fake_iso(self, isonum, tag, ratio = None, LTE = True):
+        """
+        Adds an isotope in form of an IsoMolec object.
+        """
+
+        iso = IsoMolec(self.mol, isonum, ratio=ratio, LTE=LTE)
+
+        setattr(self, tag, iso)
+        print('Added fake iso {} for molecule {}'.format(tag, self.name))
+        self.n_iso += 1
+        self.all_iso.append(tag)
+
+        return True
+
+
+    def split_molecs_levels(self, isotag, level_list = None):
+        """
+        Splits iso isotag of molec in fake isomolecs for tracking of specific levels. If level_list is not specified all levels are split, instead just the levels included in level_list are split and the other kept in the original.
+
+        To be added: possibility to group levels.
+        """
+
+        isomol = getattr(self, isotag)
+        del_iso = False
+        if level_list is None:
+            level_list = copy.deepcopy(isomol.levels)
+            del_iso = True
+
+        for lev in level_list:
+            print(lev)
+            levvo = getattr(isomol, lev)
+            tag = isotag+'_'+lev
+            self.add_fake_iso(isomol.iso, tag, ratio = isomol.ratio, LTE = isomol.is_in_LTE)
+            iso_fake = getattr(self, tag)
+            setattr(iso_fake, lev, copy.deepcopy(levvo))
+            iso_fake.levels.append(lev)
+            iso_fake.n_lev += 1
+
+            delattr(isomol, lev)
+            print(isomol.levels)
+            isomol.levels.remove(lev)
+            print(isomol.levels)
+            isomol.n_lev -= 1
+
+        if del_iso:
+            delattr(self, isotag)
+            self.all_iso.remove(isotag)
+            self.n_iso -= 1
+
+        return
+
+
     def link_to_atmos(self, atmosphere, copy = False):
         """
         Creates a link to an AtmProfile object containing temp, pres, ...
