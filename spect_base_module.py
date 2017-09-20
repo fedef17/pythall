@@ -59,7 +59,7 @@ class Coords(object):
         """
         Coordinate order is as follows:
         #Cartesian# : (x,y,z)
-        #Spherical# : (lat,lon,R)
+        #Spherical# : (lat,lon,z)
         #Pure_spherical# : (R, theta, phi)
         """
         self.coords = np.array(coords, dtype = float)
@@ -630,10 +630,16 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
+
+        if g3D:
+            try:
+                gigi = self.szas
+            except:
+                self.calc_SZA_along_los(planet, sub_solar_point)
 
         time0 = time.time()
         if tagLOS is None:
@@ -1405,6 +1411,11 @@ class VIMSPixel(Pixel):
         dmax = self.FOV_angle_up*np.sqrt(2.)*np.cos(np.pi/4.-abs(pixel_rot))
         return self.LOS(delta_ang = dmax, verbose = verbose)
 
+    def sub_solar_point(self):
+        coords = [self.sub_solar_lat, self.sub_solar_lon, 0.0]
+        point = Coords(coords, s_ref = 'Spherical')
+        return point
+
 
 class PixelSet(np.ndarray):
     """
@@ -1559,7 +1570,7 @@ class Molec(object):
             del_iso = True
 
         for lev in level_list:
-            print(lev)
+            #print(lev)
             levvo = getattr(isomol, lev)
             tag = isotag+'_'+lev
             self.add_fake_iso(isomol.iso, tag, ratio = isomol.ratio, LTE = isomol.is_in_LTE)
@@ -1569,9 +1580,9 @@ class Molec(object):
             iso_fake.n_lev += 1
 
             delattr(isomol, lev)
-            print(isomol.levels)
+            #print(isomol.levels)
             isomol.levels.remove(lev)
-            print(isomol.levels)
+            #print(isomol.levels)
             isomol.n_lev -= 1
 
         if del_iso:
