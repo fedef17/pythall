@@ -43,8 +43,8 @@ def check_free_space(cart, threshold = 0.05, verbose = False):
     return fract
 
 
-def isclose(a,b):
-    return np.isclose(a, b, rtol=1e-09, atol=0.0, equal_nan=False)
+def isclose(a,b, rtol = 1.e-9, atol = 0.0):
+    return np.isclose(a, b, rtol=rtol, atol=atol, equal_nan=False)
 
 #####################################################################################################################
 #####################################################################################################################
@@ -309,7 +309,7 @@ class LineOfSight(object):
         return los_points
 
 
-    def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False):
+    def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False, delta_x_los = 5.0):
         """
         Calculates the optimal step for radtran calculation.
         """
@@ -323,7 +323,7 @@ class LineOfSight(object):
             for gas in planet.gases:
                 gigi = self.gas
         except:
-            self.calc_atm_intersections(planet)
+            self.calc_atm_intersections(planet, delta_x = delta_x_los)
             self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
             self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
 
@@ -332,23 +332,12 @@ class LineOfSight(object):
 
         print('Line of sight tangent at {}'.format(self.tangent_altitude))
 
-        tvibs = []
         for gas in planet.gases:
             conc_gas = self.calc_abundance(planet, gas, set_attr = True)
-
-            gasso = planet.gases[gas]
-            for iso in gasso.all_iso:
-                isomol = getattr(gasso, iso)
-                if not isomol.is_in_LTE:
-                    for lev in isomol.levels:
-                        levello = getattr(isomol, lev)
-                        tvi = self.calc_along_LOS(levello.vibtemp)
-                        tvibs.append(tvi)
 
         # Calcolo shape e value della linea più intensa a diverse temps.
         min_temp = np.min(self.atm_quantities['temp'])
         max_temp = np.max(self.atm_quantities['temp'])
-
 
         print('     -        part 2: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
@@ -447,7 +436,7 @@ class LineOfSight(object):
             t_var = max(self.atm_quantities['temp'][num_orig:num])-min(self.atm_quantities['temp'][num_orig:num])
             p_var_log = np.log(max(self.atm_quantities['pres'][num_orig:num])/min(self.atm_quantities['pres'][num_orig:num]))
             tvibs_var = []
-            for tt in tvibs:
+            for tt in los_vibtemps.values():
                 tvibs_var.append(max(tt[num_orig:num])-min(tt[num_orig:num]))
             tvibs_var = np.array(tvibs_var)
 
@@ -1110,7 +1099,7 @@ def CurGod_fast(ndens, vmr = None, quantity = None, interp = 'lin', x_grid = Non
     if vmr is None:
         # calc average total num density
         CG_nd = curgods.curgod_fort_1(np.append(ndens,zeros), np.append(x_gri,zeros), n_p)
-        return CG_nd
+        resu = CG_nd
     else:
         if CG_gas_nd is None:
             # calc average gas num density
@@ -1118,7 +1107,7 @@ def CurGod_fast(ndens, vmr = None, quantity = None, interp = 'lin', x_grid = Non
 
         if quantity is None:
             # return average gas num density
-            return CG_gas_nd
+            resu = CG_gas_nd
         else:
             if interp == 'lin':
                 # quantity is assumed linear with x in each step
@@ -1129,7 +1118,12 @@ def CurGod_fast(ndens, vmr = None, quantity = None, interp = 'lin', x_grid = Non
             else:
                 raise ValueError('interp {} not recognized'.format(interp))
 
-            return CG_quant/CG_gas_nd
+            resu = CG_quant/CG_gas_nd
+
+    if not np.isnan(resu):
+        return resu
+    else:
+        raise ValueError('NaN in curgod. {} {} {}'.format(ndens,vmr,quantity))
 
 
     def funz_ndens(x, ndens = ndens, x_gri = x_gri):
@@ -2587,6 +2581,7 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     weights = []
     for p, arr, ity in zip(point,grid,itype):
         indx, wei = find_between(arr,p,ity)
+        #print(indx, wei)
         #print(p, arr, ity, indx, wei)
         indxs.append(indx)
         weights.append(wei)
@@ -2604,9 +2599,12 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     # time0 = time.time()
 
     # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente. profint si restringe passo passo, perde un asse alla volta.
+    """
+    ### Questo è da ripristinare se si vuole usare hierarchy. è un po' complesso e non ti ricordi mai come funziona. Propongo di sopprimere hierarchy e usare solo l'ordine di grid.names()
+
     hiesort = np.argsort(hierarchy)
     hiesort_dyn = []
-    #print(hiesort)
+    print(hiesort)
     for num in range(ndim):
         ok = hiesort[0]
         hiesort_dyn.append(ok)
@@ -2614,16 +2612,23 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
         for nnn in range(len(hiesort)):
             if hiesort[nnn] > ok:
                 hiesort[nnn] -= 1
-    #print(hiesort_dyn)
+    print(hiesort_dyn)
     # print('tempo 3: {}'.format(time.time()-time0))
     # time0 = time.time()
 
     profint = profi
-    for ax in hiesort_dyn:
+    for ax, ii in zip(hiesort_dyn, hiesort):
         #print(ax)
         vals = [profint.take(ind,axis=ax) for ind in [0,1]]
-        profint = int1d(vals,weights[ax],itype[ax])
-        #print('aa',vals,weights[ax],itype[ax])
+        profint = int1d(vals,weights[ii],itype[ii])
+        print('aa',vals,weights[ii],itype[ii])
+    """
+
+    profint = profi
+    for ii in range(len(point)):
+        vals = [profint.take(ind,axis=0) for ind in [0,1]]
+        profint = int1d(vals,weights[ii],itype[ii])
+        #print('aa',vals,weights[ii],itype[ii])
         #print('uuu',profint)
     # print('tempo 4: {}'.format(time.time()-time0))
     # time0 = time.time()
@@ -2767,10 +2772,10 @@ def find_between(array, value, interp='lin', thres = 1.e-5):
             # idx = indxs[:2]
             # dis = dists[:2]
             weights = np.array(weight(value,vals[0],vals[1],itype=interp))
-        elif isclose(valo, mino):
+        elif isclose(valo, mino, rtol = thres):
             idx = np.argsort(array)[:2]
             weights = np.array([1,0])
-        elif isclose(valo, maxo):
+        elif isclose(valo, maxo, rtol = thres):
             idx = np.argsort(array)[-2:]
             weights = np.array([0,1])
         else:
