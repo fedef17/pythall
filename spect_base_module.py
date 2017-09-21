@@ -184,7 +184,10 @@ class LineOfSight(object):
             points = self.calc_atm_intersections(planet)
 
         quant = []
+        #t1 = 0.
+        #t2 = 0.
         for point, nn in zip(points, range(len(points))):
+            #time0 = time.time()
             atmpoint = []
             for nam in atmosphere.grid.names():
                 if nam == 'alt':
@@ -196,9 +199,13 @@ class LineOfSight(object):
                 elif nam == 'sza':
                     atmpoint.append(self.szas[nn])
 
+            # t1 += time.time()-time0
+            # time0 = time.time()
             quant.append(atmosphere.calc(atmpoint, profname))
-        # for point, nn in zip(points, range(len(points))):
-            # quant.append(atmosphere.calc(point.Spherical()[2],profname))
+            # t2 += time.time()-time0
+            # time0 = time.time()
+        # print('Tempo singolo calc 1: {} s'.format(t1))
+        # print('Tempo singolo calc 2: {} s'.format(t2))
 
         if set_attr:
             if set_attr_name is None:
@@ -2061,6 +2068,12 @@ class AtmGrid(object):
             print('{}: {}'.format(cos[1],cos[0]))
         return sorted_names
 
+    def coords_list(self):
+        colist = []
+        for nam in self.names():
+            colist.append(self.coords[nam])
+        return colist
+
     def names(self):
         sorted_names = sorted(self.internal_order.items(), key=operator.itemgetter(1))
         names = [cos[0] for cos in sorted_names]
@@ -2129,8 +2142,9 @@ class AtmProfile(object):
 
     def __init__(self, grid, profile, profname, interp, descr=None):
         profile = np.array(profile)
-        if type(grid) is not AtmGrid:
-            raise ValueError('grid is not of type AtmGrid. Make grid first.. -> sbm.AtmGrid(coord_names, coord_points)')
+        #if type(grid) is not AtmGrid:
+        # if not isinstance(grid, AtmGrid):
+        #     raise ValueError('grid is not of type AtmGrid. Make grid first.. -> sbm.AtmGrid(coord_names, coord_points)')
         grid = copy.deepcopy(grid)
         self.descr = descr
         setattr(self, profname, copy.deepcopy(profile))
@@ -2417,15 +2431,15 @@ class AtmProfile(object):
 
         #print(self.grid.names())
         if profname is not None:
-            value = interp(getattr(self,profname), np.array(self.grid.grid), point, itype=self.interp[profname], hierarchy=self.grid.hierarchy)
+            value = interp(getattr(self,profname), self.grid.coords_list(), point, itype=self.interp[profname], hierarchy=self.grid.hierarchy)
             return value
         else:
             resu = dict()
             for nam in self.names:
                 prof = getattr(self, nam)
-                value = interp(prof, np.array(self.grid.grid), point, itype=self.interp[nam], hierarchy=self.grid.hierarchy)
+                value = interp(prof, self.grid.coords_list(), point, itype=self.interp[nam], hierarchy=self.grid.hierarchy)
                 resu[nam] = value
-            return resu
+            return resu, time
 
 
     def interp_copy(self, nomeprof, new_grid):
@@ -2559,8 +2573,8 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
         ndim = 1
         point = np.array([point])
 
-    if ndim != grid.ndim-1:
-        raise ValueError('Point should have {:1d} dimensions, instead has {:1d}'.format(grid.ndim-1,ndim))
+    if ndim != len(grid):
+        raise ValueError('Point should have {:1d} dimensions, instead has {:1d}'.format(len(grid),ndim))
 
     if itype is None:
         itype = np.array(ndim*['lin'])
@@ -2568,19 +2582,26 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
         hierarchy = np.arange(ndim)
 
     # Calcolo i punti di griglia adiacenti, con i relativi pesi
+    #time0 = time.time()
     indxs = []
     weights = []
     for p, arr, ity in zip(point,grid,itype):
-        indx, wei = find_between(np.unique(arr),p,ity)
+        indx, wei = find_between(arr,p,ity)
         #print(p, arr, ity, indx, wei)
         indxs.append(indx)
         weights.append(wei)
+
+    # print('tempo 1: {}'.format(time.time()-time0))
+    # time0 = time.time()
 
     # mi restringo l'array ad uno con solo i valori che mi interessano
     profi = prof
     for i in range(ndim):
         #print(i, indxs[i], profi.shape)
         profi = profi.take(indxs[i],axis=i)
+
+    # print('tempo 2: {}'.format(time.time()-time0))
+    # time0 = time.time()
 
     # Calcolo i valori interpolati, seguendo hierarchy in ordine crescente. profint si restringe passo passo, perde un asse alla volta.
     hiesort = np.argsort(hierarchy)
@@ -2594,6 +2615,8 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
             if hiesort[nnn] > ok:
                 hiesort[nnn] -= 1
     #print(hiesort_dyn)
+    # print('tempo 3: {}'.format(time.time()-time0))
+    # time0 = time.time()
 
     profint = profi
     for ax in hiesort_dyn:
@@ -2602,6 +2625,8 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
         profint = int1d(vals,weights[ax],itype[ax])
         #print('aa',vals,weights[ax],itype[ax])
         #print('uuu',profint)
+    # print('tempo 4: {}'.format(time.time()-time0))
+    # time0 = time.time()
 
     return profint
 
@@ -2724,33 +2749,35 @@ def find_between(array, value, interp='lin', thres = 1.e-5):
     :return:
     """
 
-    array = np.array(array)
+    if type(array) is list:
+        array = np.array(array)
+
     if interp == 'lin' or interp == 'exp' or interp == '1cos':
         valo = value
         mino = np.min(array)
         maxo = np.max(array)
-        thres = thres*(array[1]-array[0])
-        if valo < mino-thres or valo > maxo+thres:
-            raise ValueError('Extrapolation required! val: {} min: {} max: {}'.format(value, np.min(array), np.max(array)))
-        elif valo < mino:
-            #raise RuntimeWarning('ATTENTION! slight mismatch in max/min grid values and point required. {} {} diff {}'.format(value, np.min(array), value-np.min(array)))
+        if value >= mino and value <= maxo:
+            idx = np.argpartition(np.abs(array-value),[0,1])[:2]
+            #dists = np.abs(array[indxs]-value)
+            vals = array[idx]
+            # ndim = array.ndim
+            # dists = np.sort(np.abs(array-value))
+            # indxs = np.argsort(np.abs(array-value))
+            # vals = array[indxs][:2]
+            # idx = indxs[:2]
+            # dis = dists[:2]
+            weights = np.array(weight(value,vals[0],vals[1],itype=interp))
+        elif isclose(valo, mino):
             idx = np.argsort(array)[:2]
             weights = np.array([1,0])
-        elif  valo > maxo:
-            #raise RuntimeWarning('ATTENTION! slight mismatch in max/min grid values and point required. {} {} diff {}'.format(value, np.min(array), value-np.min(array)))
+        elif isclose(valo, maxo):
             idx = np.argsort(array)[-2:]
             weights = np.array([0,1])
         else:
-            ndim = array.ndim
-            dists = np.sort(np.abs(array-value))
-            indxs = np.argsort(np.abs(array-value))
-            vals = array[indxs][:2]
-            idx = indxs[:2]
-            dis = dists[:2]
-            weights = np.array(weight(value,vals[0],vals[1],itype=interp))
+            raise ValueError('Extrapolation required! val: {} min: {} max: {}'.format(value, np.min(array), np.max(array)))
     elif interp == 'box':
         thres = abs(thres*(array[1]-array[0]))
-        idx1 = np.argwhere(array < value+thres)[-1][0]
+        idx1 = np.argwhere((array <= value) | (isclose(array, value)))[-1][0]
         #print(array, value, idx1, idx1[-1])
         idx = np.array([idx1, idx1])
         weights = [1,0]
