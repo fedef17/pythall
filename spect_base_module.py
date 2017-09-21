@@ -344,6 +344,7 @@ class LineOfSight(object):
 
         abs_max = dict()
         for mol_name, molec in zip(planet.gases.keys(), planet.gases.values()):
+            print(mol_name)
             lines_mol = [lin for lin in lines if lin.Mol == molec.mol]
 
             if len(lines_mol) == 0:
@@ -363,7 +364,6 @@ class LineOfSight(object):
             shape = lin.MakeShapeLine(min_temp, 1.e-8)
             peak_val = np.max(shape.spectrum)
             abs_max[mol_name] = peak_val*max(essesss)
-
 
         # adesso parto con gli step
         opt_depth_step = 0.0
@@ -391,7 +391,7 @@ class LineOfSight(object):
                 isomol = getattr(gasso, iso)
                 if not isomol.is_in_LTE:
                     for lev in isomol.levels:
-                        print('calc los vibt {} {}'.format(iso,lev))
+                        #print('calc los vibt {} {}'.format(iso,lev))
                         levello = getattr(isomol, lev)
                         los_vibtemps[(gas,iso,lev)] = self.calc_along_LOS(levello.vibtemp)
 
@@ -490,12 +490,8 @@ class LineOfSight(object):
                         if not isomol.is_in_LTE:
                             for lev in isomol.levels:
                                 levello = getattr(isomol, lev)
-                                timeuu = time.time()
                                 tvi = los_vibtemps[(gas,iso,lev)]
-                                pclos += time.time()-timeuu
-                                timeuu = time.time()
                                 tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = tvi[num_orig:num+1])
-                                pcur += time.time()-timeuu
                                 try:
                                     levello.local_vibtemp.append(tvi)
                                 except:
@@ -513,12 +509,8 @@ class LineOfSight(object):
                         gas = cos.name
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
-                            timeuu = time.time()
                             masklos = los_maskgrids[(cos.name,par.key)]
-                            pclos += time.time()-timeuu
-                            timeuu = time.time()
                             cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = masklos[num_orig:num+1])
-                            pcur += time.time()-timeuu
                             deriv_set[par.key].append(cdtot*cg_mask)
                             if verbose: print('dssss ', par.key, cg_mask)
 
@@ -533,8 +525,6 @@ class LineOfSight(object):
         print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p1))
         print('     -        part 4 ciclo p 2: {:5.1f} s'.format(p2))
         print('     -        part 4 ciclo p 3: {:5.1f} s'.format(p3))
-        print('     -        part 4 ciclo p calc_along_LOS: {:5.1f} s'.format(pclos))
-        print('     -        part 4 ciclo p CurGod_fast: {:5.1f} s'.format(pcur))
         print('     -        part 4: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
