@@ -618,7 +618,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -658,6 +658,8 @@ class LineOfSight(object):
 
         all_molecs_abs = dict()
         all_molecs_emi = dict()
+        tracked_levels_emi = dict()
+        tracked_levels_abs = dict()
 
         # CALCULATING SINGLE GAS-iso ABS and emi
 
@@ -678,7 +680,21 @@ class LineOfSight(object):
                     continue
                 if verbose: print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
                 #print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs)
+
+                trklev = None
+                if track_levels is not None:
+                    if (gas,iso) in track_levels.keys():
+                        trklev = track_levels[(gas,iso)]
+
+                res = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs, track_levels = trklev)
+
+                abs_coeffs = res[0]
+                emi_coeffs = res[1]
+                if trklev is not None:
+                    emi_coeffs_tracked = res[2]
+                    abs_coeffs_tracked = res[3]
+                    tracked_levels_emi[(gas, iso)] = emi_coeffs_tracked
+                    tracked_levels_abs[(gas, iso)] = abs_coeffs_tracked
 
                 all_iso_abs[iso] = copy.deepcopy(abs_coeffs)
                 all_iso_emi[iso] = copy.deepcopy(emi_coeffs)
@@ -765,6 +781,14 @@ class LineOfSight(object):
                 else:
                     intens = coso
 
+                if track_levels is not None:
+                    if (gas,iso) in track_levels.keys():
+                        trklev = track_levels[(gas,iso)]
+                        for lev in trklev:
+                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
+                            iso_intensities[(iso, lev)] = copy.deepcopy(intens_lev)
+                            # SE VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
+
                 iso_intensities[iso] = copy.deepcopy(intens)
             single_intensities[gas] = copy.deepcopy(iso_intensities)
 
@@ -774,6 +798,9 @@ class LineOfSight(object):
         for gas in all_molecs_abs.keys():
             for iso in all_molecs_abs[gas].keys():
                 intensity += single_intensities[gas][iso]
+
+        print('fine radtran')
+        print('\n')
 
         if calc_derivatives:
             return intensity, single_intensities, bayes_set
