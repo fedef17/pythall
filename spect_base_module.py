@@ -749,7 +749,6 @@ class LineOfSight(object):
 
         steps = self.radtran_steps['step']
         single_intensities = dict()
-        iso_intensities = dict()
 
         for gas in all_molecs_abs.keys():
             #print('catuuuuusppspsps: ', gas)
@@ -786,18 +785,19 @@ class LineOfSight(object):
                         trklev = track_levels[(gas,iso)]
                         for lev in trklev:
                             intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
-                            iso_intensities[(iso, lev)] = copy.deepcopy(intens_lev)
-                            # SE VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
+                            single_intensities[(gas, iso, lev)] = copy.deepcopy(intens_lev)
+                            print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
+                            # SE )VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
 
-                iso_intensities[iso] = copy.deepcopy(intens)
-            single_intensities[gas] = copy.deepcopy(iso_intensities)
+                single_intensities[(gas,iso)] = copy.deepcopy(intens)
+                print('{}: {}'.format((gas,iso), intens.max()))
 
         print('     -   radtrans time: {:5.1f} min'.format((time.time()-time0)/60.))
         time0 = time.time()
 
         for gas in all_molecs_abs.keys():
             for iso in all_molecs_abs[gas].keys():
-                intensity += single_intensities[gas][iso]
+                intensity += single_intensities[(gas, iso)]
 
         print('fine radtran')
         print('\n')
