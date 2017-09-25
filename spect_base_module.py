@@ -1812,7 +1812,7 @@ class IsoMolec(object):
         # print(lev_strings)
 
         if add_fundamental:
-            minstr = extract_quanta_HITRAN(self.mol, self.iso, lev_strings[0])[0]
+            minstr = minimal_level_string(self.mol, self.iso, lev_strings[0])
             lev_0 = ''
             for lett in minstr:
                 try:
@@ -3418,8 +3418,7 @@ def extract_quanta_HITRAN(mol, iso, lev_string):
             minimal_string = lev_string.strip()
     except Exception as cazzillo:
         print('Exception found... for level string {}'.format(lev_string))
-        print(cazzillo)
-        return '', None, None
+        raise(cazzillo)
 
     return minimal_string, vib_quanta, others
 
@@ -3823,7 +3822,9 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
 
                 if len(isomol.levels) == 0:
                     if add_fundamental:
-                        minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
+                        minstr = minimal_level_string(mol, iso, lev)
+                        print('cacaca')
+                        print(mol,iso,lev,minstr)
                         lev_0 = ''
                         for lett in minstr:
                             try:
@@ -3831,6 +3832,7 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
                                 lev_0 += '0'
                             except:
                                 lev_0 += lett
+                        print(lev_0)
                         isomol.add_level(lev_0, 0.0, vibtemp = T_kin_zero)
 
                 if not isomol.has_level(lev)[0]:
@@ -3892,7 +3894,7 @@ def add_nLTE_molecs_from_tvibmanuel(planet, filename, n_alt_max = None, linee = 
 
             # add_fundamental
             if add_fundamental:
-                minstr = extract_quanta_HITRAN(mol, iso, lev)[0]
+                minstr = minimal_level_string(mol, iso, lev)
                 lev_0 = ''
                 for lett in minstr:
                     try:
