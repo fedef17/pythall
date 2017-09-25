@@ -662,6 +662,7 @@ class LineOfSight(object):
         tracked_levels_abs = dict()
 
         # CALCULATING SINGLE GAS-iso ABS and emi
+        timo = 0.
 
         for gas in planet.gases:
             gasso = planet.gases[gas]
@@ -686,7 +687,9 @@ class LineOfSight(object):
                     if (gas,iso) in track_levels.keys():
                         trklev = track_levels[(gas,iso)]
 
+                time1 = time.time()
                 res = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs, track_levels = trklev)
+                timo += time.time()-time1
 
                 abs_coeffs = res[0]
                 emi_coeffs = res[1]
@@ -705,6 +708,7 @@ class LineOfSight(object):
         # CALCULATING TOTAL ABS AND emi
 
         print('     -   reading and calc abscoeffs time: {:5.1f} min'.format((time.time()-time0)/60.))
+        print('     -   makeabs time: {:5.1f} s'.format(timo))
         time0 = time.time()
 
         abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+tagLOS+'.pic')
