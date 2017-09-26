@@ -1866,6 +1866,12 @@ class IsoMolec(object):
         self.levels.append(string)
         self.n_lev += 1
 
+    def erase_level(self, lev):
+        delattr(self, lev)
+        self.levels.remove(lev)
+        self.n_lev -= 1
+        return
+
     def find_level_from_quanta(self, quanta, simmetry = None):
         """
         Given the set of quantum numbers (list) returns the level object. Optionally also simmetry can be set.
