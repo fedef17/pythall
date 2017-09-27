@@ -232,7 +232,7 @@ class LineOfSight(object):
         return np.array(szas)
 
 
-    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, refraction = False, LOS_order = 'radtran', verbose = False):
+    def calc_atm_intersections(self, planet, delta_x = 1.0, start_from_TOA = True, refraction = False, LOS_order = 'radtran', verbose = False, stop_at_second_point = False):
         """
         Calculates the coordinates of the points that the LOS crosses in the atmosphere. If start_from_TOA is True (default), the LOS path starts at the first intersection with the atmosphere, instead it starts from the spacecraft.
         The default order is from the closest point to spacecraft to the other side (LOS_order = 'radtran'). Order can be set to 'photon'.
@@ -280,6 +280,9 @@ class LineOfSight(object):
         los_points = []
         los_points.append(Coords(point_0, R = planet.radius))
 
+        if stop_at_second_point:
+            sp_dist_old = Coords(point_0, R = planet.radius).distance(self.second_point, units = 'km')
+
         inside = True
         point = point_0
         while inside:
@@ -297,6 +300,14 @@ class LineOfSight(object):
                 break
             elif inside and not surface_hit:
                 po = Coords(point, R = planet.radius)
+                if stop_at_second_point:
+                    sp_dist = po.distance(self.second_point, units = 'km')
+                    if isclose(sp_dist,0.0) or sp_dist > sp_dist_old:
+                        los_points.append(copy.deepcopy(self.second_point))
+                        if verbose: print('Reached second point.. Stopping ray path.')
+                        break
+                    else:
+                        sp_dist_old = sp_dist
                 los_points.append(copy.deepcopy(po))
                 if verbose: print('Still inside at {} (spherical)'.format(po.Spherical()))
 
@@ -318,12 +329,15 @@ class LineOfSight(object):
 
         try:
             gigi = self.intersections
+        except:
+            self.calc_atm_intersections(planet, delta_x = delta_x_los)
+
+        try:
             gigi = self.temp
             gigi = self.pres
             for gas in planet.gases:
                 gigi = self.gas
         except:
-            self.calc_atm_intersections(planet, delta_x = delta_x_los)
             self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
             self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
 
@@ -618,7 +632,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -626,8 +640,14 @@ class LineOfSight(object):
         if g3D:
             try:
                 gigi = self.szas
+                if fixed_sza is not None:
+                    # to test the difference with no sza variation along the los
+                    self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
             except:
                 self.calc_SZA_along_los(planet, sub_solar_point)
+            if fixed_sza is not None:
+                # to test the difference with single with no sza variation along the los
+                self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
 
         time0 = time.time()
         if tagLOS is None:
@@ -754,6 +774,10 @@ class LineOfSight(object):
         steps = self.radtran_steps['step']
         single_intensities = dict()
 
+        if solo_absorption:
+            coso = self.radtran_single(intensity, abs_coeff_tot, None, None, steps, None, solo_absorption = True)
+            return coso
+
         for gas in all_molecs_abs.keys():
             #print('catuuuuusppspsps: ', gas)
             all_iso_emi = all_molecs_emi[gas]
@@ -812,7 +836,7 @@ class LineOfSight(object):
             return intensity, single_intensities
 
 
-    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False):
+    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False, solo_absorption = False):
         """
         Integrates the formal solution of the radtran equation along the LOS.
         : abs_coeff_tot : the absorption coefficient of all gases in the atmosphere.
@@ -832,6 +856,17 @@ class LineOfSight(object):
 
         time0 = time.time()
         ii = 0
+
+        if solo_absorption:
+            for step in steps:
+                ab_tot = abs_coeff_tot.read_one()
+                tau = ab_tot*step
+                gama = tau.exp_elementwise(exp_factor = -1.0)
+                Gama_tot *= gama
+
+            izero *= Gama_tot
+            return izero
+
         # Summing step by step the contribution of the local Source function
         abs_coeff_tot.prepare_read()
         abs_coeff_gas.prepare_read()
@@ -885,34 +920,15 @@ class LineOfSight(object):
                     pezzo2 = Source*unomenogama*Gama_strange[par.key]
                     pezzo3 = deSdeq*unomenogama*Gama_tot*deriv_factors[par.key][num]
                     par.hires_deriv += (pezzo1+pezzo2+pezzo3)
-                    #print('ssssssssssssssssssssssss {} -> {}'.format(num, par.hires_deriv.max()))
+
                     Gama_strange[par.key] = Gama_strange[par.key]*gama + degamadeq*Gama_tot*deriv_factors[par.key][num]
-                    # if par is ret_set.set[-1]:
-                    #     pl.figure(17)
-                    #     pezzo1.plot(label = 'step {}'.format(num))
-                    #     pl.figure(18)
-                    #     pezzo2.plot(label = 'step {}'.format(num))
-                    #     pl.figure(19)
-                    #     pezzo3.plot(label = 'step {}'.format(num))
-                    #     if iso_ab > 0.5 and debugfile is not None:
-                    #         pickle.dump([num, pezzo1, pezzo2, pezzo3, Source, unomenogama, degamadeq, Gama_tot, Gama_strange], debugfile)
 
             Gama_tot *= gama
 
-            # ok = (intensity.spectral_grid.grid > 2115.6286) & (intensity.spectral_grid.grid < 2115.6294)
-            # print(('{:4d} '+9*'{:12.3e}' ).format(ii, step, nd, intensity.spectrum[ok][0],  ab.spectrum[ok][0], em.spectrum[ok][0], tau.spectrum[ok][0], tau_exp.spectrum[ok][0], Gama_tot.spectrum[ok][0], Source.spectrum[ok][0]))
-            # pl.figure(41)
-            # intensity.plot(label = 'Step {}'.format(ii))
-            # pl.grid()
-            # pl.figure(43)
-            # Source.plot(label = 'Step {}'.format(ii))
-            # pl.grid()
-            # pl.figure(44)
-            # tau.plot(label = 'Step {}'.format(ii))
-            # pl.grid()
             if verbose: print('Giro {} finito in {} sec'.format(ii, time.time()-time1))
 
         # summing the original intensity absorbed by the atmosphere
+        print('ATTENZIONE: qui sto sommando izero per ogni gas! devo farlo solo una volta fuori')
         intensity += izero*Gama_tot
 
         if calc_derivatives:
@@ -1200,7 +1216,16 @@ def angle_between(vector1,vector2,deg_output=True):
     v1 = normalize(vector1)
     v2 = normalize(vector2)
 
-    angle = mt.acos(LA.linalg.dot(v1,v2))
+    try:
+        dotprod = LA.linalg.dot(v1,v2)
+        if isclose(dotprod, 1.0):
+            dotprod = 1.0
+        elif isclose(dotprod, -1.0):
+            dotprod = -1.0
+        angle = mt.acos(dotprod)
+    except Exception as cazzillo:
+        print(LA.linalg.dot(v1,v2))
+        raise cazzillo
 
     if deg_output:
         return deg(angle)
