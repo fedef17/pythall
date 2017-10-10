@@ -864,7 +864,7 @@ def scatter(x,y,col,cond=None,lat=None,lon=None,polo='S',xlim=None,ylim=None,cli
 
     return
 
-def leggi_map_aur(polo):
+def leggi_map_aur(polo, folder = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/'):
     """
     VIP4:
     Legge le coordinate dell'ovale previsto dal modello VIP4.
@@ -876,9 +876,9 @@ def leggi_map_aur(polo):
     :return:
     """
     if polo == 'S':
-        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/southR30table.txt'
+        filename = folder+'southR30table.txt'
     if polo == 'N':
-        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/northR30table.txt'
+        filename = folder+'northR30table.txt'
 
     infile = open(filename, 'r')
     infile.readline()
@@ -892,9 +892,9 @@ def leggi_map_aur(polo):
     infile.close()
 
     if polo == 'S':
-        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/statistico/south_aurora.txt'
+        filename = folder+'statistico/south_aurora.txt'
     if polo == 'N':
-        filename = '/home/fedefab/Scrivania/Research/Jiram/DATA/Model_VIP4/statistico/north_aurora.txt'
+        filename = folder+'statistico/north_aurora.txt'
 
     infile = open(filename, 'r')
     infile.readline()

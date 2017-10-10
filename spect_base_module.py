@@ -12,7 +12,8 @@ from numpy import linalg as LA
 import scipy.constants as const
 import warnings
 import copy
-import pickle
+#import pickle
+import cPickle as pickle
 import time
 import spect_main_module as smm
 import spect_classes as spcl
@@ -320,6 +321,18 @@ class LineOfSight(object):
         return los_points
 
 
+    def get_coord_range(self):
+        sfpo = [cos.Spherical() for cos in self.intersections]
+        lats = [cos[0] for cos in sfpo]
+        lons = [cos[1] for cos in sfpo]
+        alts = [cos[2] for cos in sfpo]
+        coord_range = dict()
+        coord_range['alt'] = [min(alts), max(alts)]
+        coord_range['lat'] = [min(lats), max(lats)]
+        coord_range['lon'] = [min(lons), max(lons)]
+        return coord_range
+
+
     def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False, delta_x_los = 5.0):
         """
         Calculates the optimal step for radtran calculation.
@@ -393,6 +406,7 @@ class LineOfSight(object):
         self.radtran_steps['temp'] = dict()
         self.radtran_steps['pres'] = dict()
         self.radtran_steps['ndens'] = dict()
+        self.radtran_steps['vibtemp'] = dict()
 
         los_vibtemps = dict()
         for gas in planet.gases:
@@ -408,15 +422,28 @@ class LineOfSight(object):
                         #print('calc los vibt {} {}'.format(iso,lev))
                         levello = getattr(isomol, lev)
                         los_vibtemps[(gas,iso,lev)] = self.calc_along_LOS(levello.vibtemp)
+                        self.radtran_steps['vibtemp'][(gas,iso,lev)] = []
 
+        self.involved_retparams = dict()
         los_maskgrids = dict()
+        timeder = time.time()
         if calc_derivatives:
+            coord_range = self.get_coord_range()
             self.radtran_steps['deriv_factors'] = dict()
             for cos in bayes_set.sets.values():
                 self.radtran_steps['deriv_factors'][cos.name] = dict()
                 for par in cos.set:
+                    if not cos.check_involved(par.key,coord_range):
+                        par.set_not_involved()
+                        self.involved_retparams[(par.nameset, par.key)] = False
+                        continue
+                    else:
+                        par.set_involved()
+                        self.involved_retparams[(par.nameset, par.key)] = True
+                    print('involved', cos.name, par.key)
                     self.radtran_steps['deriv_factors'][cos.name][par.key] = []
                     los_maskgrids[(cos.name,par.key)] = self.calc_along_LOS(par.maskgrid)
+                    print(par.key, los_maskgrids[(cos.name,par.key)], '{:5.1f}'.format(time.time()-timeder))
 
         end_LOS = False
         num = 0
@@ -506,6 +533,7 @@ class LineOfSight(object):
                                 levello = getattr(isomol, lev)
                                 tvi = los_vibtemps[(gas,iso,lev)]
                                 tvi = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = tvi[num_orig:num+1])
+                                self.radtran_steps['vibtemp'][(gas,iso,lev)].append(tvi)
                                 try:
                                     levello.local_vibtemp.append(tvi)
                                 except:
@@ -523,6 +551,8 @@ class LineOfSight(object):
                         gas = cos.name
                         if verbose: print('gssss ', gas)
                         for par in cos.set:
+                            if not self.involved_retparams[(par.nameset, par.key)]: continue
+                            #if par.not_involved: continue
                             masklos = los_maskgrids[(cos.name,par.key)]
                             cg_mask = CurGod_fast(self.atm_quantities['ndens'][num_orig:num+1], vmr = self.atm_quantities[(gas,'vmr')][num_orig:num+1], quantity = masklos[num_orig:num+1])
                             deriv_set[par.key].append(cdtot*cg_mask)
@@ -585,9 +615,9 @@ class LineOfSight(object):
         single_coeffs_emi = dict()
 
         for gas in planet.gases:
+            ndens = self.calc_abundance(planet, gas)
             print(gas)
             gasso = planet.gases[gas]
-            ndens = self.calc_abundance(planet, gas)
             #print('aaaaaaaaaaaaaaaaaargh ', ndens)
             iso_abs = []
             iso_emi = []
@@ -631,6 +661,237 @@ class LineOfSight(object):
 
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
+
+    def radtran_fast(self, sp_gri, planet, lines, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False):
+        """
+        Calculates the radtran along the LOS. step in km.
+        """
+
+        if g3D:
+            try:
+                gigi = self.szas
+                if fixed_sza is not None:
+                    # to test the difference with no sza variation along the los
+                    self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
+            except:
+                self.calc_SZA_along_los(planet, sub_solar_point)
+            if fixed_sza is not None:
+                # to test the difference with single with no sza variation along the los
+                self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
+
+        time0 = time.time()
+        if self.tag is None:
+            self.tag = 'LOS'
+
+        if cartDROP is None:
+            cartDROP = 'stuff_'+smm.date_stamp()
+            if not os.path.exists(cartDROP):
+                os.mkdir(cartDROP)
+            cartDROP += '/'
+
+        try:
+            gigi = self.radtran_steps['step']
+            if calc_derivatives:
+                gigi = self.radtran_steps['deriv_factors']
+        except:
+            self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
+
+        print('     -   radtran steps time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
+
+        spe_zero = np.zeros(len(sp_gri.grid), dtype=float)
+
+        if initial_intensity is None:
+            intensity = spcl.SpectralIntensity(spe_zero, sp_gri)
+        else:
+            intensity = copy.deepcopy(initial_intensity)
+
+        all_molecs_abs = dict()
+        all_molecs_emi = dict()
+        tracked_levels_emi = dict()
+        tracked_levels_abs = dict()
+
+        # CALCULATING SINGLE GAS-iso ABS and emi
+        timo = 0.
+
+        for gas in planet.gases:
+            gasso = planet.gases[gas]
+
+            temps = self.radtran_steps['temp'][gas]
+            press = self.radtran_steps['pres'][gas]
+
+            all_iso_abs = dict()
+            all_iso_emi = dict()
+            #print(gasso.all_iso)
+            for iso in gasso.all_iso:
+                check_free_space(cartDROP)
+                isomol = getattr(gasso, iso)
+                if len([lin for lin in lines if lin.Mol == isomol.mol and lin.Iso == isomol.iso]) == 0:
+                    print('Skippin gas {} {}, no lines found'.format(gas, iso))
+                    continue
+                if verbose: print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
+                #print('Catulloneeeeeeee')
+
+                trklev = None
+                if track_levels is not None:
+                    if (gas,iso) in track_levels.keys():
+                        trklev = track_levels[(gas,iso)]
+
+                for lev in isomol.levels:
+                    levello = getattr(isomol, lev)
+                    levello.add_local_vibtemp(self.radtran_steps['vibtemp'][(gas,iso,lev)])
+
+                time1 = time.time()
+                res = smm.make_abscoeff_LUTS_fast(sp_gri, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = store_abscoeff, cartDROP = cartDROP, track_levels = trklev, tagLOS = self.tag)
+                timo += time.time()-time1
+
+                abs_coeffs = res[0]
+                emi_coeffs = res[1]
+                if trklev is not None:
+                    emi_coeffs_tracked = res[2]
+                    abs_coeffs_tracked = res[3]
+                    tracked_levels_emi[(gas, iso)] = emi_coeffs_tracked
+                    tracked_levels_abs[(gas, iso)] = abs_coeffs_tracked
+
+                all_iso_abs[iso] = copy.deepcopy(abs_coeffs)
+                all_iso_emi[iso] = copy.deepcopy(emi_coeffs)
+
+            all_molecs_abs[gas] = all_iso_abs
+            all_molecs_emi[gas] = all_iso_emi
+
+        # CALCULATING TOTAL ABS AND emi
+
+        print('     -   reading and calc abscoeffs time: {:5.1f} min'.format((time.time()-time0)/60.))
+        print('     -   makeabs time: {:5.1f} s'.format(timo))
+        time0 = time.time()
+
+        abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+self.tag+'.pic', spectral_grid = sp_gri)
+        emi_coeff_tot = smm.AbsSetLOS(cartDROP+'emicoeff_tot_'+self.tag+'.pic', spectral_grid = sp_gri)
+        if store_abscoeff:
+            abs_coeff_tot.prepare_export()
+            emi_coeff_tot.prepare_export()
+
+        for num in range(len(self.radtran_steps['step'])):
+            abs_coeff = spcl.SpectralObject(spe_zero, sp_gri, link_grid = True)
+            emi_coeff = spcl.SpectralObject(spe_zero, sp_gri, link_grid = True)
+            for gas in all_molecs_abs.keys():
+                nd = self.radtran_steps['ndens'][gas][num]
+                gasso = planet.gases[gas]
+                for iso in all_molecs_abs[gas].keys():
+                    check_free_space(cartDROP)
+                    isomol = getattr(gasso, iso)
+                    gigio_ab = all_molecs_abs[gas][iso]
+                    gigio_em = all_molecs_emi[gas][iso]
+                    if gigio_ab is None:
+                        continue
+                    if store_abscoeff:
+                        if gigio_ab.temp_file is None:
+                            gigio_ab.prepare_read()
+                            gigio_em.prepare_read()
+                        ab = gigio_ab.read_one()
+                        em = gigio_em.read_one()
+                    else:
+                        ab = gigio_ab.set[num]
+                        em = gigio_em.set[num]
+                    iso_ab = isomol.ratio
+
+                    abs_coeff += ab * (nd*iso_ab)
+                    emi_coeff += em * (nd*iso_ab)
+
+            if store_abscoeff:
+                abs_coeff_tot.add_dump(abs_coeff)
+                emi_coeff_tot.add_dump(emi_coeff)
+            else:
+                abs_coeff_tot.add_set(abs_coeff)
+                emi_coeff_tot.add_set(emi_coeff)
+
+        for gas in all_molecs_abs.keys():
+            for iso in all_molecs_abs[gas].keys():
+                if all_molecs_abs[gas][iso] is None:
+                    continue
+                if store_abscoeff:
+                    all_molecs_abs[gas][iso].finalize_IO()
+                    all_molecs_emi[gas][iso].finalize_IO()
+
+        if store_abscoeff:
+            abs_coeff_tot.finalize_IO()
+            emi_coeff_tot.finalize_IO()
+
+        print('     -   calc total abscoeff time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
+
+        steps = self.radtran_steps['step']
+        single_intensities = dict()
+
+        if solo_absorption:
+            coso = self.radtran_single(intensity, abs_coeff_tot, None, None, steps, None, solo_absorption = True)
+            return coso
+
+        for gas in all_molecs_abs.keys():
+            #print('catuuuuusppspsps: ', gas)
+            all_iso_emi = all_molecs_emi[gas]
+            all_iso_abs = all_molecs_abs[gas]
+            ndens = np.array(self.radtran_steps['ndens'][gas])
+
+            ret_set = None
+            derivfa = None
+            if calc_derivatives:
+                if gas in bayes_set.sets.keys():
+                    ret_set = bayes_set.sets[gas]
+                    derivfa = self.radtran_steps['deriv_factors'][gas]
+                    for par in ret_set.set:
+                        if not self.involved_retparams[(par.nameset, par.key)]: continue
+                        #if par.not_involved: continue
+                        par.add_hires_deriv(spcl.SpectralIntensity(spe_zero, sp_gri))
+
+            for iso in all_molecs_abs[gas].keys():
+                #print('catuuuuusppspsps: ', iso)
+                emi_coeffs = all_iso_emi[iso]
+                abs_coeffs = all_iso_abs[iso]
+                isomol = getattr(planet.gases[gas], iso)
+                iso_ab = isomol.ratio
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
+                if calc_derivatives:
+                    # ret_set_iso = coso[1]
+                    # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
+                    #     par.hires_deriv += par_iso.hires_deriv
+                    intens = coso[0]
+                else:
+                    intens = coso
+
+                if track_levels is not None:
+                    if (gas,iso) in track_levels.keys():
+                        trklev = track_levels[(gas,iso)]
+                        for lev in trklev:
+                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
+                            single_intensities[(gas, iso, lev)] = copy.deepcopy(intens_lev)
+                            print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
+                            # SE )VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
+
+                single_intensities[(gas,iso)] = copy.deepcopy(intens)
+                print('{}: {}'.format((gas,iso), intens.max()))
+
+        print('     -   radtrans time: {:5.1f} min'.format((time.time()-time0)/60.))
+        time0 = time.time()
+
+        for gas in all_molecs_abs.keys():
+            for iso in all_molecs_abs[gas].keys():
+                intensity += single_intensities[(gas, iso)]
+
+        print('fine radtran')
+        print('\n')
+
+        if calc_derivatives:
+            out = [intensity, single_intensities, bayes_set]
+        else:
+            out = [intensity, single_intensities]
+
+        if queue is None:
+            return out
+        else:
+            queue.put(out)
+
+        return
 
     def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False):
         """
@@ -731,8 +992,8 @@ class LineOfSight(object):
         print('     -   makeabs time: {:5.1f} s'.format(timo))
         time0 = time.time()
 
-        abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+tagLOS+'.pic')
-        emi_coeff_tot = smm.AbsSetLOS(cartDROP+'emicoeff_tot_'+tagLOS+'.pic')
+        abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+tagLOS+'.pic', spectral_grid = sp_gri)
+        emi_coeff_tot = smm.AbsSetLOS(cartDROP+'emicoeff_tot_'+tagLOS+'.pic', spectral_grid = sp_gri)
         abs_coeff_tot.prepare_export()
         emi_coeff_tot.prepare_export()
 
@@ -791,6 +1052,8 @@ class LineOfSight(object):
                     ret_set = bayes_set.sets[gas]
                     derivfa = self.radtran_steps['deriv_factors'][gas]
                     for par in ret_set.set:
+                        if not self.involved_retparams[(par.nameset, par.key)]: continue
+                        # if par.not_involved: continue
                         par.add_hires_deriv(spcl.SpectralIntensity(spe_zero.spectrum, spe_zero.spectral_grid))
 
             for iso in all_molecs_abs[gas].keys():
@@ -799,7 +1062,7 @@ class LineOfSight(object):
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile)
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
                 if calc_derivatives:
                     # ret_set_iso = coso[1]
                     # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
@@ -836,7 +1099,7 @@ class LineOfSight(object):
             return intensity, single_intensities
 
 
-    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False, solo_absorption = False):
+    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False, solo_absorption = False, store_abscoeff = True):
         """
         Integrates the formal solution of the radtran equation along the LOS.
         : abs_coeff_tot : the absorption coefficient of all gases in the atmosphere.
@@ -867,14 +1130,23 @@ class LineOfSight(object):
             izero *= Gama_tot
             return izero
 
+        if abs_coeff_gas is None or emi_coeff_gas is None:
+            if calc_derivatives:
+                return izero, ret_set
+            else:
+                return izero
+
         # Summing step by step the contribution of the local Source function
-        abs_coeff_tot.prepare_read()
-        abs_coeff_gas.prepare_read()
-        emi_coeff_gas.prepare_read()
+        if store_abscoeff:
+            abs_coeff_tot.prepare_read()
+            abs_coeff_gas.prepare_read()
+            emi_coeff_gas.prepare_read()
 
         if calc_derivatives:
             Gama_strange = dict()
             for par in ret_set.set:
+                if not self.involved_retparams[(par.nameset, par.key)]: continue
+                # if par.not_involved: continue
                 Gama_strange[par.key] = copy.deepcopy(Zeros)
 
         if verbose: print('TOTAL STEPS: {}'.format(abs_coeff_tot.counter))
@@ -883,9 +1155,14 @@ class LineOfSight(object):
         for step, nd, num in zip(steps, ndens, range(len(steps))):
             if verbose: print(step,nd)
             ii += 1
-            ab_tot = abs_coeff_tot.read_one()
-            em = emi_coeff_gas.read_one()
-            ab = abs_coeff_gas.read_one()
+            if store_abscoeff:
+                ab_tot = abs_coeff_tot.read_one()
+                em = emi_coeff_gas.read_one()
+                ab = abs_coeff_gas.read_one()
+            else:
+                ab_tot = abs_coeff_tot.set[num]
+                em = emi_coeff_gas.set[num]
+                ab = abs_coeff_gas.set[num]
             if verbose: print('{} steps remaining'.format(abs_coeff_tot.remaining))
 
             max_depth = np.max(ab_tot.spectrum)*step
@@ -916,6 +1193,8 @@ class LineOfSight(object):
                 deSdeq = Source*cos*degamadeq/nd
 
                 for par in ret_set.set:
+                    #if par.not_involved: continue
+                    if not self.involved_retparams[(par.nameset, par.key)]: continue
                     pezzo1 = Source*Gama_tot*degamadeq*(-deriv_factors[par.key][num])
                     pezzo2 = Source*unomenogama*Gama_strange[par.key]
                     pezzo3 = deSdeq*unomenogama*Gama_tot*deriv_factors[par.key][num]
@@ -933,6 +1212,8 @@ class LineOfSight(object):
 
         if calc_derivatives:
             for par in ret_set.set:
+                if not self.involved_retparams[(par.nameset, par.key)]: continue
+                # if par.not_involved: continue
                 par.hires_deriv += izero*Gama_strange[par.key]
 
         if verbose: print('Finito radtran in {} s'.format(time.time()-time0))
@@ -2222,6 +2503,38 @@ class AtmProfile(object):
                 profiles[nam] = getattr(self, nam)
             return profiles
 
+    def plot(self, profname = None, fix_lat = None, fix_sza = None, fix_alt = None, logplot = False, label = None):
+        dim = len(self.grid.coords)
+        if profname is None:
+            profname = self.names[0]
+        if dim == 1:
+            # alt
+            pl.ylabel('Alt (km)')
+            pl.xlabel(profname)
+            pl.plot(self.profile(), self.grid.coords['alt'])
+        elif dim == 2:
+            # lat alt
+            pl.ylabel('Alt (km)')
+            pl.xlabel(profname)
+            alts = self.grid.coords['alt']
+            for i, lat in zip(range(len(self.grid.coords['lat'])), self.grid.coords['lat']):
+                if fix_lat is not None:
+                    if lat != fix_lat:
+                        continue
+                if label is None:
+                    label = 'lat {}'.format(i)
+                pl.plot(self.profile()[:,i], self.grid.coords['alt'], label = label)
+            #pl.legend()
+        elif dim == 3:
+            print('scrivimi')
+            if fix_coords is not None:
+                pass
+
+        if logplot:
+            pl.xscale('log')
+
+        return
+
     def keys(self):
         return self.names
 
@@ -2465,6 +2778,21 @@ class AtmProfile(object):
         :param profname: name of the profile to calculate (es: 'temp', 'pres')
         :return: If only one profile is stored in AtmProfile, the output is a number. If there are more profiles stored in AtmProfile, the output of calc is a dict containing all interpolated values. If profname is set (ex. 'temp') returns the value of the profile 'temp' at the point.
         """
+
+        if isinstance(point, Coords):
+            atmpoint = []
+            for nam in self.grid.names():
+                if nam == 'alt':
+                    atmpoint.append(point.Spherical()[2])
+                elif nam == 'lat':
+                    atmpoint.append(point.Spherical()[0])
+                elif nam == 'lon':
+                    atmpoint.append(point.Spherical()[1])
+                elif nam == 'sza':
+                    atmpoint.append(self.szas[nn])
+
+            point = np.array(atmpoint)
+
         try:
             len(point)
             if type(point) is list:
