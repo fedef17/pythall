@@ -662,7 +662,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran_fast(self, sp_gri, planet, lines, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False):
+    def radtran_fast(self, sp_gri, planet, lines, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False, time_control = False):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -696,7 +696,7 @@ class LineOfSight(object):
         except:
             self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
 
-        print('     -   radtran steps time: {:5.1f} min'.format((time.time()-time0)/60.))
+        if time_control: print('     -   radtran steps time: {:5.1f} min'.format((time.time()-time0)/60.))
         time0 = time.time()
 
         spe_zero = np.zeros(len(sp_gri.grid), dtype=float)
@@ -761,8 +761,8 @@ class LineOfSight(object):
 
         # CALCULATING TOTAL ABS AND emi
 
-        print('     -   reading and calc abscoeffs time: {:5.1f} min'.format((time.time()-time0)/60.))
-        print('     -   makeabs time: {:5.1f} s'.format(timo))
+        if time_control: print('     -   reading and calc abscoeffs time: {:5.1f} min'.format((time.time()-time0)/60.))
+        if time_control: print('     -   makeabs time: {:5.1f} s'.format(timo))
         time0 = time.time()
 
         abs_coeff_tot = smm.AbsSetLOS(cartDROP+'abscoeff_tot_'+self.tag+'.pic', spectral_grid = sp_gri)
@@ -817,7 +817,7 @@ class LineOfSight(object):
             abs_coeff_tot.finalize_IO()
             emi_coeff_tot.finalize_IO()
 
-        print('     -   calc total abscoeff time: {:5.1f} min'.format((time.time()-time0)/60.))
+        if time_control: print('     -   calc total abscoeff time: {:5.1f} min'.format((time.time()-time0)/60.))
         time0 = time.time()
 
         steps = self.radtran_steps['step']
@@ -865,21 +865,21 @@ class LineOfSight(object):
                         for lev in trklev:
                             intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
                             single_intensities[(gas, iso, lev)] = copy.deepcopy(intens_lev)
-                            print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
+                            if time_control: print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
                             # SE )VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
 
                 single_intensities[(gas,iso)] = copy.deepcopy(intens)
                 print('{}: {}'.format((gas,iso), intens.max()))
 
-        print('     -   radtrans time: {:5.1f} min'.format((time.time()-time0)/60.))
+        if time_control: print('     -   radtrans time: {:5.1f} min'.format((time.time()-time0)/60.))
         time0 = time.time()
 
         for gas in all_molecs_abs.keys():
             for iso in all_molecs_abs[gas].keys():
                 intensity += single_intensities[(gas, iso)]
 
-        print('fine radtran')
-        print('\n')
+        if time_control: print('fine radtran')
+        if time_control: print('\n')
 
         if calc_derivatives:
             out = [intensity, single_intensities, bayes_set]
@@ -1207,7 +1207,7 @@ class LineOfSight(object):
             if verbose: print('Giro {} finito in {} sec'.format(ii, time.time()-time1))
 
         # summing the original intensity absorbed by the atmosphere
-        print('ATTENZIONE: qui sto sommando izero per ogni gas! devo farlo solo una volta fuori')
+        if verbose: print('ATTENZIONE: qui sto sommando izero per ogni gas! devo farlo solo una volta fuori')
         intensity += izero*Gama_tot
 
         if calc_derivatives:
