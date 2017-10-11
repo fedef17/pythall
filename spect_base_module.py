@@ -23,6 +23,7 @@ import curgods
 
 import Tkinter
 import tkMessageBox
+from memory_profiler import profile
 
 #parameters
 Rtit = 2575.0 # km
@@ -662,7 +663,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran_fast(self, sp_gri, planet, lines, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False, time_control = False):
+    def radtran_fast(self, sp_gri, planet, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False, time_control = False):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -693,8 +694,10 @@ class LineOfSight(object):
             gigi = self.radtran_steps['step']
             if calc_derivatives:
                 gigi = self.radtran_steps['deriv_factors']
-        except:
-            self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
+        except Exception as cazzillo:
+            print('los.calc_radtran_steps should be run before radtran_fast')
+            raise cazzillo
+            #self.calc_radtran_steps(planet, lines, calc_derivatives = calc_derivatives, bayes_set = bayes_set, **radtran_opt)
 
         if time_control: print('     -   radtran steps time: {:5.1f} min'.format((time.time()-time0)/60.))
         time0 = time.time()
@@ -726,9 +729,6 @@ class LineOfSight(object):
             for iso in gasso.all_iso:
                 check_free_space(cartDROP)
                 isomol = getattr(gasso, iso)
-                if len([lin for lin in lines if lin.Mol == isomol.mol and lin.Iso == isomol.iso]) == 0:
-                    print('Skippin gas {} {}, no lines found'.format(gas, iso))
-                    continue
                 if verbose: print('Calculating mol {}, iso {}. Mol in LTE? {}'.format(isomol.mol,isomol.iso,isomol.is_in_LTE))
                 #print('Catulloneeeeeeee')
 
@@ -742,7 +742,7 @@ class LineOfSight(object):
                     levello.add_local_vibtemp(self.radtran_steps['vibtemp'][(gas,iso,lev)])
 
                 time1 = time.time()
-                res = smm.make_abscoeff_LUTS_fast(sp_gri, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = store_abscoeff, cartDROP = cartDROP, track_levels = trklev, tagLOS = self.tag)
+                res = smm.make_abscoeff_LUTS_fast(sp_gri, isomol, temps, press, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = store_abscoeff, cartDROP = cartDROP, track_levels = trklev, tagLOS = self.tag)
                 timo += time.time()-time1
 
                 abs_coeffs = res[0]
