@@ -167,7 +167,7 @@ class LineOfSight(object):
 
         return
 
-    def calc_along_LOS(self, atmosphere, planet = None, profname = None, curgod = False, set_attr = False, set_attr_name = None):
+    def calc_along_LOS(self, atmosphere, planet = None, profname = None, curgod = False, set_attr = False, set_attr_name = None, uniform_max_sza = True):
         """
         Returns a vector with prof values on the LOS.
         planet is needed if intersections have to be calculated.
@@ -187,6 +187,8 @@ class LineOfSight(object):
 
         quant = []
         #t1 = 0.
+        if uniform_max_sza and 'sza' in atmosphere.grid.names():
+            max_sza = atmosphere.grid.range()['sza'][1]
         #t2 = 0.
         for point, nn in zip(points, range(len(points))):
             #time0 = time.time()
@@ -199,7 +201,10 @@ class LineOfSight(object):
                 elif nam == 'lon':
                     atmpoint.append(point.Spherical()[1])
                 elif nam == 'sza':
-                    atmpoint.append(self.szas[nn])
+                    val = self.szas[nn]
+                    if val > max_sza and uniform_max_sza:
+                        val = max_sza
+                    atmpoint.append(val)
 
             # t1 += time.time()-time0
             # time0 = time.time()
@@ -334,7 +339,7 @@ class LineOfSight(object):
         return coord_range
 
 
-    def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False, delta_x_los = 5.0):
+    def calc_radtran_steps(self, planet, lines, max_opt_depth = None, max_T_variation = 5.0, max_Plog_variation = 2.0, calc_derivatives = False, bayes_set = None, verbose = False, delta_x_los = 5.0, queue = None):
         """
         Calculates the optimal step for radtran calculation.
         """
@@ -355,7 +360,7 @@ class LineOfSight(object):
             self.calc_along_LOS(planet.atmosphere, profname = 'temp', set_attr = True)
             self.calc_along_LOS(planet.atmosphere, profname = 'pres', set_attr = True)
 
-        print('     -        part 1: {:5.1f} s'.format((time.time()-time0)))
+        if verbose: print('     -        part 1: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         print('Line of sight tangent at {}'.format(self.tangent_altitude))
@@ -367,12 +372,12 @@ class LineOfSight(object):
         min_temp = np.min(self.atm_quantities['temp'])
         max_temp = np.max(self.atm_quantities['temp'])
 
-        print('     -        part 2: {:5.1f} s'.format((time.time()-time0)))
+        if verbose: print('     -        part 2: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         abs_max = dict()
         for mol_name, molec in zip(planet.gases.keys(), planet.gases.values()):
-            print(mol_name)
+            if verbose: print(mol_name)
             lines_mol = [lin for lin in lines if lin.Mol == molec.mol]
 
             if len(lines_mol) == 0:
@@ -441,15 +446,15 @@ class LineOfSight(object):
                     else:
                         par.set_involved()
                         self.involved_retparams[(par.nameset, par.key)] = True
-                    print('involved', cos.name, par.key)
+                    if verbose: print('involved', cos.name, par.key)
                     self.radtran_steps['deriv_factors'][cos.name][par.key] = []
                     los_maskgrids[(cos.name,par.key)] = self.calc_along_LOS(par.maskgrid)
-                    print(par.key, los_maskgrids[(cos.name,par.key)], '{:5.1f}'.format(time.time()-timeder))
+                    if verbose: print(par.key, los_maskgrids[(cos.name,par.key)], '{:5.1f}'.format(time.time()-timeder))
 
         end_LOS = False
         num = 0
 
-        print('     -        part 3: {:5.1f} s'.format((time.time()-time0)))
+        if verbose: print('     -        part 3: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
         stp_tot = 0.0
@@ -567,14 +572,17 @@ class LineOfSight(object):
                 p3 += time.time()-time1
                 time1 = time.time()
 
-        print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p1))
-        print('     -        part 4 ciclo p 2: {:5.1f} s'.format(p2))
-        print('     -        part 4 ciclo p 3: {:5.1f} s'.format(p3))
-        print('     -        part 4: {:5.1f} s'.format((time.time()-time0)))
+        if verbose: print('     -        part 4 ciclo p 1: {:5.1f} s'.format(p1))
+        if verbose: print('     -        part 4 ciclo p 2: {:5.1f} s'.format(p2))
+        if verbose: print('     -        part 4 ciclo p 3: {:5.1f} s'.format(p3))
+        if verbose: print('     -        part 4: {:5.1f} s'.format((time.time()-time0)))
         time0 = time.time()
 
-        print('Estimated total optical depth: {}'.format(estim_tot_depth))
+        if verbose: print('Estimated total optical depth: {}'.format(estim_tot_depth))
         if verbose: print('total length of LOS: {}'.format(stp_tot))
+
+        if queue is not None:
+            queue.put(self)
 
         return
 
@@ -1660,16 +1668,18 @@ class Pixel(object):
         # self.bbl = np.array(bbl)
         return
 
-    def plot(self, range=None, mask=True, show=True, nomefile=None):
+    def plot(self, range=None, mask=False, show=True, nomefile=None):
         """
         Plots spectrum in the required range. If mask=True does not show masked values.
         :param range: Wl range in which to plot
         :return:
         """
         if range is not None:
-            ok = (self.wl >= range[0]) & (self.wl <= range[1]) & (self.mask == 1)
-        else:
-            ok = (self.mask == 1)
+            ok = (self.wl >= range[0]) & (self.wl <= range[1])
+
+        if mask:
+            ok2 = self.mask == 1
+            ok = ok & ok2
 
         fig = pl.figure(figsize=(8, 6), dpi=150)
         pl.plot(self.wl[ok],self.spe[ok])
@@ -2406,8 +2416,8 @@ class AtmGrid(object):
         names = [cos[0] for cos in sorted_names]
         return names
 
-    def range(self):
-        ranges = []
+    def range(self, verbose = False):
+        ranges = dict()
         sorted_names = sorted(self.internal_order.items(), key=operator.itemgetter(1))
         for [nam, num] in sorted_names:
             coo = self.coords[nam]
@@ -2423,8 +2433,8 @@ class AtmGrid(object):
             else:
                 stepo = steps[0]
             rangio = [mino,maxo]
-            ranges.append((nam, rangio))
-            print('{}: {} -> {}  --  step: {}'.format(num,nam,rangio,stepo))
+            ranges[nam] = rangio
+            if verbose: print('{}: {} -> {}  --  step: {}'.format(num,nam,rangio,stepo))
         return ranges
 
     def merge(self, other):
@@ -2771,7 +2781,7 @@ class AtmProfile(object):
         return profnew
 
 
-    def calc(self, point, profname = None):
+    def calc(self, point, profname = None, sza = None, uniform_max_sza = True):
         """
         Interpolates the profile at the given point.
         :param point: np.array point to be considered. len(point) = self.ndim
@@ -2789,7 +2799,12 @@ class AtmProfile(object):
                 elif nam == 'lon':
                     atmpoint.append(point.Spherical()[1])
                 elif nam == 'sza':
-                    atmpoint.append(self.szas[nn])
+                    val = sza
+                    max_sza = self.grid.range()['sza'][1]
+                    if val > max_sza:
+                        if uniform_max_sza:
+                            val = max_sza
+                    atmpoint.append(val)
 
             point = np.array(atmpoint)
 
