@@ -686,6 +686,7 @@ class LineOfSight(object):
                 self.calc_SZA_along_los(planet, sub_solar_point)
             if fixed_sza is not None:
                 # to test the difference with single with no sza variation along the los
+                print('Using fixed sza!: {}'.format(fixed_sza))
                 self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
 
         time0 = time.time()
@@ -2524,21 +2525,66 @@ class AtmProfile(object):
             pl.plot(self.profile(), self.grid.coords['alt'])
         elif dim == 2:
             # lat alt
+            coords = self.grid.names()
+            indalt = coords.index('alt')
+            indlat = coords.index('lat')
+            if len(self.names) > 1:
+                profo = self.get(profname)
+            else:
+                profo = self
             pl.ylabel('Alt (km)')
             pl.xlabel(profname)
-            alts = self.grid.coords['alt']
-            for i, lat in zip(range(len(self.grid.coords['lat'])), self.grid.coords['lat']):
+            alts = profo.grid.coords['alt']
+            for i, lat in zip(range(len(profo.grid.coords['lat'])), profo.grid.coords['lat']):
                 if fix_lat is not None:
                     if lat != fix_lat:
                         continue
                 if label is None:
                     label = 'lat {}'.format(i)
-                pl.plot(self.profile()[:,i], self.grid.coords['alt'], label = label)
+                prf = profo.profile().take(i, axis = indlat)
+                pl.plot(prf, self.grid.coords['alt'], label = label)
             #pl.legend()
         elif dim == 3:
             print('scrivimi')
-            if fix_coords is not None:
-                pass
+            coords = self.grid.names()
+            indalt = coords.index('alt')
+            indlat = coords.index('lat')
+            indsza = coords.index('sza')
+            if fix_alt is not None:
+                i = list(self.grid.coords['alt']).index(fix_alt)
+                prof = self.profile().take(i, axis = indalt)
+                if indlat > indalt: indlat -= 1
+                if indsza > indalt: indsza -= 1
+                for i,lat in zip(range(len(self.grid.coords['lat'])), self.grid.coords['lat']):
+                    prf = prof.take(i, axis = indlat)
+                    label = 'lat {}'.format(i)
+                    pl.plot(prf,self.grid.coords['sza'], label = label)
+                pl.ylabel('sza')
+                pl.xlabel(profname)
+            elif fix_lat is not None:
+                i = list(self.grid.coords['lat']).index(fix_lat)
+                prof = self.profile().take(i, axis = indlat)
+                if indalt > indlat: indalt -= 1
+                if indsza > indlat: indsza -= 1
+                for i,sza in zip(range(len(self.grid.coords['sza'])), self.grid.coords['sza']):
+                    prf = prof.take(i, axis = indsza)
+                    label = 'sza {}'.format(sza)
+                    pl.plot(prf,self.grid.coords['alt'], label = label)
+                pl.ylabel('alt (km)')
+                pl.xlabel(profname)
+            elif fix_sza is not None:
+                i = list(self.grid.coords['sza']).index(fix_sza)
+                prof = self.profile().take(i, axis = indsza)
+                if indlat > indsza: indlat -= 1
+                if indalt > indsza: indalt -= 1
+                for i,lat in zip(range(len(self.grid.coords['lat'])),self.grid.coords['lat']):
+                    prf = prof.take(i, axis = indlat)
+                    label = 'lat {}'.format(i)
+                    pl.plot(prf,self.grid.coords['alt'], label = label)
+                pl.ylabel('alt (km)')
+                pl.xlabel(profname)
+            else:
+                raise ValueError('set one among fix_alt, fix_lat and fix_sza')
 
         if logplot:
             pl.xscale('log')
@@ -3105,6 +3151,12 @@ def ratio_to_vibtemp(energy,ratio,temp):
     """
 
     prof = energy/kbc*(energy/(kbc*temp)-np.log(ratio))**(-1)
+    if np.any(prof < 0):
+        print('abuabicasidfiafoasofaoofafjoajoooooooooooooo')
+        print(energy)
+        print(ratio[:])
+        print(temp[:])
+        print(prof[:])
 
     return prof
 
@@ -3619,7 +3671,7 @@ def write_input_prof_gbb(filename, prof, ptype, n_alt = 151, alt_step = 10.0, nl
     return
 
 
-def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4):
+def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4):
     """
     Reads in_vibtemp.dat file. Output is a list of sbm.Molec objects. Atmosphere is a sbm.AtmProfile object with at
     """
@@ -3635,19 +3687,32 @@ def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151
     trova_spip(infile)
     n_mol = int(infile.readline().rstrip())
 
-    molecs = []
-    mol = 0
-    molec = Molec(mol, 'mol_0', MM=None)
+    if molecs is None:
+        molecs = dict()
+        add_only_vt = False
+    else:
+        add_only_vt = True
 
     for ii in range(n_mol):
         trova_spip(infile)
         mol, iso, n_lev = map(int, infile.readline().rstrip().split())
+
+        info = find_molec_metadata(mol, iso)
+        try:
+            molec = molecs[info['mol_name']]
+        except:
+            molecs[info['mol_name']] = Molec(mol, name = info['mol_name'])
+            molec = molecs[info['mol_name']]
+
+        striso = 'iso_{:1d}'.format(iso)
+
+        try:
+            isomol = getattr(molec, striso)
+        except:
+            molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
+            isomol = getattr(molec, striso)
+
         print(mol,iso,n_lev)
-        if mol != molec.mol: # Se è una molecola nuova ricreo il molec
-            if molec.mol != 0: molecs.append(molec)
-            molec = Molec(mol, 'mol_{:2d}'.format(mol), MM=None)
-            molec.link_to_atmos(atmosphere)
-        molec.add_iso(iso)
 
         for ll in range(n_lev):
             trova_spip(infile)
@@ -3655,11 +3720,23 @@ def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151
             lev_str = linea[0:15]
             print(linea.split())
             n_lev_int, n_simm = map(int,linea[15:].split()[:2])
-            try:
-                fac, energy = map(float,linea[15:].split()[2:])
-            except:
-                fac = float(linea[15:].split()[2])
-                energy = find_ch4_energy(lev_str)
+
+            if not add_only_vt:
+                try:
+                    fac, energy = map(float,linea[15:].split()[2:])
+                except:
+                    fac = float(linea[15:].split()[2])
+                    energy = find_ch4_energy(lev_str)
+            else:
+                ok, lev = isomol.has_level(lev_str)
+                print(ok,lev)
+                if not ok:
+                    trova_spip(infile)
+                    trova_spip(infile)
+                    continue
+                levvo = getattr(isomol, lev)
+                print(levvo.energy)
+                energy = levvo.energy
             simms = []
             for sss in range(n_simm):
                 simms.append(infile.readline().rstrip()[0:15])
@@ -3675,13 +3752,12 @@ def read_tvib_gbb(filename, atmosphere, grid = None, l_ratio = True, n_alt = 151
             alt_gri = AtmGrid('alt', alts)
             prof = AtmProfile(alt_gri, prof, 'vibtemp', 'lin')
 
-            # levello = Level(lev_str, energy, degen = -1, simmetry = simms)
-            # levello.add_vibtemp(prof)
-            isomol = getattr(molec, 'iso_{:1d}'.format(iso))
-            isomol.add_level(lev_str, energy, degeneracy = -1, simmetry = simms, vibtemp = prof)
+            if not add_only_vt:
+                isomol.add_level(lev_str, energy, degeneracy = -1, simmetry = simms, vibtemp = prof)
+            else:
+                levvo.add_vibtemp(prof)
+                levvo.add_simmetries(simms)
             trova_spip(infile)
-
-    molecs.append(molec)
 
     return molecs
 
