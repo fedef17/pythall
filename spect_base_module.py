@@ -671,23 +671,10 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran_fast(self, sp_gri, planet, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, store_abscoeff = False, time_control = False):
+    def radtran_fast(self, sp_gri, planet, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, track_levels = None, solo_absorption = False, store_abscoeff = False, time_control = False):
         """
         Calculates the radtran along the LOS. step in km.
         """
-
-        if g3D:
-            try:
-                gigi = self.szas
-                if fixed_sza is not None:
-                    # to test the difference with no sza variation along the los
-                    self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
-            except:
-                self.calc_SZA_along_los(planet, sub_solar_point)
-            if fixed_sza is not None:
-                # to test the difference with single with no sza variation along the los
-                print('Using fixed sza!: {}'.format(fixed_sza))
-                self.szas = np.ones(len(self.szas), dtype=float)*fixed_sza
 
         time0 = time.time()
         if self.tag is None:
