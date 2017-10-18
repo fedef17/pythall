@@ -4394,6 +4394,7 @@ def read_tvib_manuel(filename, n_alt_max = None, extend_to_alt = None, correct_l
         levels.append(linea[0:ind_e].strip())
         if correct_levstring:
             coso = [figu for figu in levels[-1]]
+            coso = [coso[3], coso[1], coso[2], coso[0]]
             levels[-1] = ''
             for co in coso:
                 levels[-1] += ' '+co
