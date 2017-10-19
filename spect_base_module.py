@@ -2509,7 +2509,12 @@ class AtmProfile(object):
             # alt
             pl.ylabel('Alt (km)')
             pl.xlabel(profname)
-            pl.plot(self.profile(), self.grid.coords['alt'])
+            #print(self.profile()[profname], self.grid.coords['alt'])
+            if type(self.profile()) is dict:
+                prof = self.profile()[profname]
+            else:
+                prof = self.profile()
+            pl.plot(prof, self.grid.coords['alt'])
         elif dim == 2:
             # lat alt
             coords = self.grid.names()
@@ -3008,6 +3013,8 @@ def interp(prof, grid, point, itype=None, hierarchy=None):
     indxs = []
     weights = []
     for p, arr, ity in zip(point,grid,itype):
+        if ity == '1cos':
+            ity = 'lin'
         indx, wei = find_between(arr,p,ity)
         #print(indx, wei)
         #print(p, arr, ity, indx, wei)
@@ -3192,6 +3199,9 @@ def find_between(array, value, interp='lin', thres = 1.e-5):
         array = np.array(array)
 
     if interp == 'lin' or interp == 'exp' or interp == '1cos':
+        if interp == '1cos':
+            # i'm suppressing the 1cos interpolation, which obviously fails badly aroung 90°
+            interp = 'lin'
         valo = value
         mino = np.min(array)
         maxo = np.max(array)
