@@ -3144,9 +3144,18 @@ def ratio_to_vibtemp(energy,ratio,temp):
     Converts non-lte ratio to vibrational temperature profile. Simple array profiles as input.
     """
 
+
     prof = energy/kbc*(energy/(kbc*temp)-np.log(ratio))**(-1)
+
+    if np.any(np.isnan(prof)):
+        if isclose(energy, 0.0):
+            prof = temp
+            return prof
+        else:
+            raise ValueError('Nan in ratio to vibtemp conversion')
+
     if np.any(prof < 0):
-        print('abuabicasidfiafoasofaoofafjoajoooooooooooooo')
+        print('population inversion! negative temperature!')
         print(energy)
         print(ratio[:])
         print(temp[:])
@@ -3693,6 +3702,7 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
     for ii in range(n_mol):
         trova_spip(infile)
         mol, iso, n_lev = map(int, infile.readline().rstrip().split())
+        print(ii,mol,iso,n_lev)
 
         info = find_molec_metadata(mol, iso)
         try:
@@ -3706,16 +3716,17 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
         try:
             isomol = getattr(molec, striso)
         except:
+            print('bau',mol, iso, striso, molec.all_iso)
             molec.add_iso(iso, ratio = info['iso_ratio'], LTE = False)
             isomol = getattr(molec, striso)
 
-        print(mol,iso,n_lev)
+        #print(mol,iso,n_lev)
 
         for ll in range(n_lev):
             trova_spip(infile)
             linea = infile.readline().rstrip()
             lev_str = linea[0:15]
-            print(linea.split())
+            #print(linea.split())
             n_lev_int, n_simm = map(int,linea[15:].split()[:2])
 
             if not add_only_vt:
@@ -3726,13 +3737,13 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
                     energy = find_ch4_energy(lev_str)
             else:
                 ok, lev = isomol.has_level(lev_str)
-                print(ok,lev)
+                #print(ok,lev)
                 if not ok:
                     trova_spip(infile)
                     trova_spip(infile)
                     continue
                 levvo = getattr(isomol, lev)
-                print(levvo.energy)
+                #print(levvo.energy)
                 energy = levvo.energy
             simms = []
             for sss in range(n_simm):
