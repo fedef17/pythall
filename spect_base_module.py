@@ -3684,6 +3684,7 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
     """
     Reads in_vibtemp.dat file. Output is a list of sbm.Molec objects. Atmosphere is a sbm.AtmProfile object with at
     """
+    print(filename)
     if grid is None:
         alts = np.linspace(0,(n_alt-1)*alt_step,n_alt)
     else:
