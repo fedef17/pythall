@@ -3741,8 +3741,9 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
                     energy = find_ch4_energy(lev_str)
             else:
                 ok, lev = isomol.has_level(lev_str)
-                #print(ok,lev)
+                print(ok,lev)
                 if not ok:
+                    print('ciclo')
                     trova_spip(infile)
                     trova_spip(infile)
                     continue
