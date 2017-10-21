@@ -2514,7 +2514,7 @@ class AtmProfile(object):
                 prof = self.profile()[profname]
             else:
                 prof = self.profile()
-            pl.plot(prof, self.grid.coords['alt'])
+            pl.plot(prof, self.grid.coords['alt'], label = label)
         elif dim == 2:
             # lat alt
             coords = self.grid.names()
