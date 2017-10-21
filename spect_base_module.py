@@ -3144,6 +3144,9 @@ def ratio_to_vibtemp(energy,ratio,temp):
     Converts non-lte ratio to vibrational temperature profile. Simple array profiles as input.
     """
 
+    if isclose(energy, 0.0):
+        prof = temp
+        return prof
 
     prof = energy/kbc*(energy/(kbc*temp)-np.log(ratio))**(-1)
 
@@ -3759,6 +3762,7 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
             # prof = AtmProfile(prof, alts, profname = 'vibtemp')
             alt_gri = AtmGrid('alt', alts)
             prof = AtmProfile(alt_gri, prof, 'vibtemp', 'lin')
+            print(lev, prof.profile().min(), prof.profile().max())
 
             if not add_only_vt:
                 isomol.add_level(lev_str, energy, degeneracy = -1, simmetry = simms, vibtemp = prof)
