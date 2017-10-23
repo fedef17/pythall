@@ -1933,6 +1933,15 @@ class Molec(object):
         return
 
 
+def add_molec_HITRAN(mol, add_all_iso = True, n_max = None, lines = None, add_levels = False):
+    """
+    Create a molec object with HITRAN data.
+    """
+    moleca = Molec(mol)
+    moleca.add_all_iso_from_HITRAN(lines = lines, n_max = n_max, add_levels = add_levels)
+    return moleca
+
+
 def find_all_iso_HITRAN(mol, metadatafile = './molparam.txt'):
     """
     Finds all isotopologues of molecule in the HITRAN list.
