@@ -1108,6 +1108,9 @@ class LineOfSight(object):
         : ret_set : the set of retrieval parameters connected with gas vmr.
         : deriv_factors : the derivatives of the gas number density with respect to the parameters (dictionary)
         """
+        if ret_set is None:
+            calc_derivatives = False
+
         Ones = spcl.SpectralObject(np.ones(len(intensity.spectrum), dtype = float), intensity.spectral_grid)
         Zeros = spcl.SpectralObject(np.zeros(len(intensity.spectrum), dtype = float), intensity.spectral_grid)
         Gama_tot = copy.deepcopy(Ones)
