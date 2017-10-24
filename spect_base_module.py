@@ -1286,6 +1286,8 @@ class LineOfSight(object):
 
         return point
 
+    def get_tangent_altitude(self, point_0 = np.array([0,0,0]),refraction = False):
+        return self.get_tangent_point().Spherical()[2]
 
     def get_tangent_point(self, point_0 = np.array([0,0,0]),refraction = False):
         """
