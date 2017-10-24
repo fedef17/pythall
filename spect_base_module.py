@@ -839,6 +839,9 @@ class LineOfSight(object):
                         if not self.involved_retparams[(par.nameset, par.key)]: continue
                         #if par.not_involved: continue
                         par.add_hires_deriv(spcl.SpectralIntensity(spe_zero, sp_gri))
+                    calc_der_gas = True
+                else:
+                    calc_der_gas = False
 
             for iso in all_molecs_abs[gas].keys():
                 #print('catuuuuusppspsps: ', iso)
@@ -846,8 +849,8 @@ class LineOfSight(object):
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
-                if calc_derivatives:
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_der_gas, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
+                if calc_der_gas:
                     # ret_set_iso = coso[1]
                     # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
                     #     par.hires_deriv += par_iso.hires_deriv
