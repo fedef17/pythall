@@ -831,6 +831,7 @@ class LineOfSight(object):
 
             ret_set = None
             derivfa = None
+            calc_der_gas = False
             if calc_derivatives:
                 if gas in bayes_set.sets.keys():
                     ret_set = bayes_set.sets[gas]
