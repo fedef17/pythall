@@ -116,7 +116,7 @@ class LineOfSight(object):
     Class to represent the geometry of an observation.
     """
 
-    def __init__(self, spacecraft_coords, second_point, delta_ang = None, rot_plane_ang = None):
+    def __init__(self, spacecraft_coords, second_point, delta_ang = None, rot_plane_ang = None, tag = None):
         """
         The coordinates of first and second point (Coords objects).
         : delta_ang : (optional). The los vector is rotated by delta_ang (in rad) in the plane containing the original vector and the planet center. If rot_plane_ang is set, the rotation of the los vector is performed in a plane rotated counterclockwise by rot_plane_ang.
@@ -126,6 +126,7 @@ class LineOfSight(object):
         self.atm_quantities = dict()
         self.delta_ang = delta_ang
         self.rot_plane_ang = rot_plane_ang
+        self.tag = tag
 
         return
 
@@ -671,7 +672,7 @@ class LineOfSight(object):
         return abs_opt_depth, emi_opt_depth, single_coeffs_abs, single_coeffs_emi
 
 
-    def radtran_fast(self, sp_gri, planet, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, track_levels = None, solo_absorption = False, store_abscoeff = False, time_control = False):
+    def radtran_fast(self, sp_gri, planet, queue = None, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, debugfile = None, LUTS = None, radtran_opt = dict(), verbose = False, track_levels = None, solo_absorption = False, store_abscoeff = False, time_control = False, print_line_history = None, print_integ_history = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -850,7 +851,7 @@ class LineOfSight(object):
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_der_gas, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_der_gas, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff, print_line_history = print_line_history, print_integ_history = print_integ_history, tag = self.tag+'_'+iso)
                 if calc_der_gas:
                     # ret_set_iso = coso[1]
                     # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
@@ -863,7 +864,7 @@ class LineOfSight(object):
                     if (gas,iso) in track_levels.keys():
                         trklev = track_levels[(gas,iso)]
                         for lev in trklev:
-                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
+                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab, store_abscoeff = store_abscoeff)
                             single_intensities[(gas, iso, lev)] = copy.deepcopy(intens_lev)
                             if time_control: print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
                             # SE )VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
@@ -931,6 +932,7 @@ class LineOfSight(object):
         time0 = time.time()
 
         spe_zero = smm.prepare_spe_grid(wn_range)
+        sp_gri = spe_zero.spectral_grid
 
         if initial_intensity is None:
             intensity = spcl.SpectralIntensity(spe_zero.spectrum, spe_zero.spectral_grid)
@@ -970,6 +972,9 @@ class LineOfSight(object):
 
                 time1 = time.time()
                 res = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs, track_levels = trklev)
+                #pickle.dump(res, open('absc2.pic','w'))
+                # print('ATTENTOOOOOOOOOOHHHHHHHHHHHHHH')
+                # res = pickle.load(open('absc2.pic'))
                 timo += time.time()-time1
 
                 abs_coeffs = res[0]
@@ -1062,7 +1067,7 @@ class LineOfSight(object):
                 abs_coeffs = all_iso_abs[iso]
                 isomol = getattr(planet.gases[gas], iso)
                 iso_ab = isomol.ratio
-                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = store_abscoeff)
+                coso = self.radtran_single(intensity, abs_coeff_tot, abs_coeffs, emi_coeffs, steps, ndens, iso_ab = iso_ab, calc_derivatives = calc_derivatives, ret_set = ret_set, deriv_factors = derivfa, debugfile = debugfile, store_abscoeff = True)
                 if calc_derivatives:
                     # ret_set_iso = coso[1]
                     # for par_iso, par in zip(ret_set_iso.set, ret_set.set):
@@ -1075,7 +1080,7 @@ class LineOfSight(object):
                     if (gas,iso) in track_levels.keys():
                         trklev = track_levels[(gas,iso)]
                         for lev in trklev:
-                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab)
+                            intens_lev = self.radtran_single(intensity, abs_coeff_tot, tracked_levels_abs[(gas,iso)][lev], tracked_levels_emi[(gas,iso)][lev], steps, ndens, iso_ab = iso_ab, store_abscoeff = True)
                             single_intensities[(gas, iso, lev)] = copy.deepcopy(intens_lev)
                             print('{}: {}'.format((gas,iso,lev), intens_lev.max()))
                             # SE )VUOI AGGIUNGERE DERIVATE SINGOLO LIVELLO QUESTO è il posto. O sennò le fai numeriche che forse è meglio.
@@ -1099,7 +1104,7 @@ class LineOfSight(object):
             return intensity, single_intensities
 
 
-    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False, solo_absorption = False, store_abscoeff = True):
+    def radtran_single(self, intensity, abs_coeff_tot, abs_coeff_gas, emi_coeff_gas, steps, ndens, iso_ab = 1.0, calc_derivatives = False, ret_set = None, deriv_factors = None, debugfile = None, verbose = False, solo_absorption = False, store_abscoeff = True, print_line_history = None, print_integ_history = None, tag = None):
         """
         Integrates the formal solution of the radtran equation along the LOS.
         : abs_coeff_tot : the absorption coefficient of all gases in the atmosphere.
@@ -1111,6 +1116,8 @@ class LineOfSight(object):
         : calc_derivatives : bool to turn on derivatives calculation
         : ret_set : the set of retrieval parameters connected with gas vmr.
         : deriv_factors : the derivatives of the gas number density with respect to the parameters (dictionary)
+        : print_line_history : a list of wavenumbers of which you want to track the evolution along the LOS.
+        : print_integ_history : a list of wavenumber ranges in which you want to track the evolution of the spectrum integral along the LOS.
         """
         if ret_set is None:
             calc_derivatives = False
@@ -1154,6 +1161,36 @@ class LineOfSight(object):
 
         if verbose: print('TOTAL STEPS: {}'.format(abs_coeff_tot.counter))
 
+        if print_line_history is not None or print_integ_history is not None:
+            strin = '{:4s} {:10s} {:12s} {:12s}'.format('num','step( km)','nd(cm-3)','col(cm-2)')
+            strform = '{:4d} {:10.2f} {:12.3e} {:12.3e}'
+            ok_print_hist = False
+            lin_hists = []
+            lin_int_hists = []
+            for el in print_line_history:
+                if el < intensity.spectral_grid.min_wn() or el > intensity.spectral_grid.max_wn():
+                    continue
+                ok_print_hist = True
+                lin_hists.append(np.argmin(intensity.spectral_grid.grid - el))
+                strin += ' ab{:10.4f}'.format(el)
+                strin += ' em{:10.4f}'.format(el)
+                strin += ' sp{:10.4f}'.format(el)
+                strin += ' ga{:10.4f}'.format(el)
+                strform += 4*' {:12.3e}'
+            for el in print_integ_history:
+                if el[1] < intensity.spectral_grid.min_wn() or el[0] > intensity.spectral_grid.max_wn():
+                    continue
+                ok_print_hist = True
+                lin_int_hists.append(el)
+                strin += ' int{:9.3f}+{:7.3f}'.format(el[0], el[1]-el[0])
+                strform += ' {:20.5e}'
+
+            if ok_print_hist:
+                filoss = open('line_history_'+tag+'_{:4d}to{:4d}.dat'.format(intensity.spectral_grid.min_wn(), intensity.spectral_grid.max_wn()),'w')
+                filoss.write(strin+'\n')
+                strform += '\n'
+                filoss.write('#\n')
+
         ii = 0
         for step, nd, num in zip(steps, ndens, range(len(steps))):
             if verbose: print(step,nd)
@@ -1179,9 +1216,25 @@ class LineOfSight(object):
             Source.spectrum[np.isnan(Source.spectrum)] = 0.0
             Source.spectrum[np.isinf(Source.spectrum)] = 0.0
             #print('Questo è brutto! Cambia mettendo la source alla temp sua, vabbè è bruttino uguale eh..')
+            maxli = np.argmax(tau.spectrum)
 
             unomenogama = gama*(-1.0)+1.0
             intensity += unomenogama*Source*Gama_tot
+            if ok_print_hist:
+                cose = []
+                cose.append(num)
+                cose.append(step*1.e-5)
+                cose.append(nd)
+                cose.append(step*nd)
+                for el in lin_hists:
+                    cose.append(ab.spectrum[el]*iso_ab)
+                    cose.append(em.spectrum[el]*iso_ab*nd)
+                    cose.append(intensity.spectrum[el])
+                    cose.append(gama.spectrum[el])
+                for el in lin_int_hists:
+                    cose.append(intensity.integrate(w1 = el[0], w2 = el[1]))
+                filoss.write(strform.format(*cose))
+                # print('{:4d} {:10.2f} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e}'.format(num, step*1.e-5, nd, step*nd, iso_ab*ab.integrate(), iso_ab*em.integrate(), ab.max()*iso_ab, em.max()*iso_ab, intensity.max(), intensity.spectrum[maxli-20], intensity.integrate(), gama.spectrum[maxli]))
 
             if calc_derivatives:
                 degamadeq = ab*gama*(-iso_ab)
@@ -2040,6 +2093,8 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
     """
     Loads molecular metadata from the molparam.txt HITRAN file. Returns a dict with: mol. name, iso. name, iso. ratio, iso. MM
     """
+    #print(__file__)
+    # cart del modulo è os.path.dirname(__file__)
 
     if mol > 47:
         raise ValueError('There are only 47 molecs here.')
@@ -2047,7 +2102,11 @@ def find_molec_metadata(mol, iso, filename = './molparam.txt'):
     #print('Looking for mol {}, iso {}'.format(mol,iso))
     resu = dict()
 
-    infile = open(filename,'r')
+    try:
+        infile = open(filename,'r')
+    except IOError:
+        infile = open(os.path.dirname(__file__)+filename,'r')
+
     for i in range(mol):
         find_spip(infile)
         resu['mol_name'] = infile.readline().split()[0]
@@ -2511,6 +2570,10 @@ class AtmProfile(object):
         return nuprof
 
     def profile(self):
+        """
+        Returns the np.array version of profile on the grid points.
+        In case more names are defined, returns a dict() with all profiles.
+        """
         if len(self.names) == 1:
             return getattr(self, self.names[0])
         else:
@@ -2884,7 +2947,7 @@ class AtmProfile(object):
                 prof = getattr(self, nam)
                 value = interp(prof, self.grid.coords_list(), point, itype=self.interp[nam], hierarchy=self.grid.hierarchy)
                 resu[nam] = value
-            return resu, time
+            return resu
 
 
     def interp_copy(self, nomeprof, new_grid):
@@ -3698,7 +3761,7 @@ def write_input_prof_gbb(filename, prof, ptype, n_alt = 151, alt_step = 10.0, nl
     return
 
 
-def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = True, n_alt = 151, alt_step = 10.0, nlat = 4):
+def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = False, n_alt = 151, alt_step = 10.0, nlat = 4):
     """
     Reads in_vibtemp.dat file. Output is a list of sbm.Molec objects. Atmosphere is a sbm.AtmProfile object with at
     """
@@ -3778,10 +3841,12 @@ def read_tvib_gbb(filename, atmosphere, molecs = None, grid = None, l_ratio = Tr
                 line = infile.readline()
                 prof += list(map(float, line.split()))
             prof = np.array(prof[::-1])
-            prof = ratio_to_vibtemp(energy, prof, temp)
-            # prof = AtmProfile(prof, alts, profname = 'vibtemp')
             alt_gri = AtmGrid('alt', alts)
-            prof = AtmProfile(alt_gri, prof, 'vibtemp', 'lin')
+            if not l_ratio:
+                prof = ratio_to_vibtemp(energy, prof, temp)
+                prof = AtmProfile(alt_gri, prof, 'vibtemp', 'lin')
+            else:
+                prof = AtmProfile(alt_gri, prof, 'ratio', 'lin')
             print(lev, prof.profile().min(), prof.profile().max())
 
             if not add_only_vt:
