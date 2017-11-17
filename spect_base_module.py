@@ -646,7 +646,7 @@ class LineOfSight(object):
                 set_emi = []
 
                 #print('Catulloneeeeeeee')
-                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True)
+                abs_coeffs, emi_coeffs = smm.make_abscoeff_isomolec(wn_range, isomol, self.atm_quantities['temp'], self.atm_quantities['pres'], lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, n_threads = n_threads)
                 iso_ab = isomol.ratio
                 for aboo, emoo, ndoo in zip(abs_coeffs,emi_coeffs, ndens):
                     #print(aboo,emoo,ndoo,iso_ab)
@@ -894,7 +894,7 @@ class LineOfSight(object):
 
         return
 
-    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False):
+    def radtran(self, wn_range, planet, lines, cartLUTs = None, calc_derivatives = False, bayes_set = None, initial_intensity = None, cartDROP = None, tagLOS = None, debugfile = None, useLUTs = False, LUTS = None, radtran_opt = dict(), verbose = False, g3D = False, sub_solar_point = None, track_levels = None, fixed_sza = None, solo_absorption = False, n_threads = None):
         """
         Calculates the radtran along the LOS. step in km.
         """
@@ -971,7 +971,7 @@ class LineOfSight(object):
                         trklev = track_levels[(gas,iso)]
 
                 time1 = time.time()
-                res = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs, track_levels = trklev)
+                res = smm.make_abscoeff_isomolec(wn_range, isomol, temps, press, lines = lines, LTE = isomol.is_in_LTE, allLUTs = LUTS, store_in_memory = True, cartDROP = cartDROP, tagLOS = tagLOS, useLUTs = useLUTs, track_levels = trklev, n_threads = n_threads)
                 #pickle.dump(res, open('absc2.pic','w'))
                 # print('ATTENTOOOOOOOOOOHHHHHHHHHHHHHH')
                 # res = pickle.load(open('absc2.pic'))
