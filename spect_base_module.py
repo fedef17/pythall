@@ -1160,11 +1160,11 @@ class LineOfSight(object):
                 Gama_strange[par.key] = copy.deepcopy(Zeros)
 
         if verbose: print('TOTAL STEPS: {}'.format(abs_coeff_tot.counter))
+        ok_print_hist = False
 
         if print_line_history is not None or print_integ_history is not None:
             strin = '{:4s} {:10s} {:12s} {:12s}'.format('num','step( km)','nd(cm-3)','col(cm-2)')
             strform = '{:4d} {:10.2f} {:12.3e} {:12.3e}'
-            ok_print_hist = False
             lin_hists = []
             lin_int_hists = []
             for el in print_line_history:
@@ -1186,10 +1186,14 @@ class LineOfSight(object):
                 strform += ' {:20.5e}'
 
             if ok_print_hist:
-                filoss = open('line_history_'+tag+'_{:4d}to{:4d}.dat'.format(intensity.spectral_grid.min_wn(), intensity.spectral_grid.max_wn()),'w')
+                rangio = '_{:4d}to{:4d}_'.format(int(intensity.spectral_grid.min_wn()), int(intensity.spectral_grid.max_wn()))
+                filoss = open('line_history_'+tag+rangio+'.dat','w')
                 filoss.write(strin+'\n')
                 strform += '\n'
                 filoss.write('#\n')
+                gigiofiles = []
+                for el,pii in zip(lin_int_hists, range(len(lin_int_hists))):
+                    gigiofiles.append(open('int_line_history_'+tag+rangio+'linea{:02d}.pic'.format(pii),'wb'))
 
         ii = 0
         for step, nd, num in zip(steps, ndens, range(len(steps))):
@@ -1234,6 +1238,9 @@ class LineOfSight(object):
                 for el in lin_int_hists:
                     cose.append(intensity.integrate(w1 = el[0], w2 = el[1]))
                 filoss.write(strform.format(*cose))
+
+                for fi,el in zip(gigiofiles, lin_int_hists):
+                    pickle.dump(intensity[el],fi)
                 # print('{:4d} {:10.2f} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e} {:12.3e}'.format(num, step*1.e-5, nd, step*nd, iso_ab*ab.integrate(), iso_ab*em.integrate(), ab.max()*iso_ab, em.max()*iso_ab, intensity.max(), intensity.spectrum[maxli-20], intensity.integrate(), gama.spectrum[maxli]))
 
             if calc_derivatives:
@@ -1273,6 +1280,10 @@ class LineOfSight(object):
                 par.hires_deriv += izero*Gama_strange[par.key]
 
         if verbose: print('Finito radtran in {} s'.format(time.time()-time0))
+
+        if ok_print_hist:
+            for fi in gigiofiles:
+                fi.close()
 
         if calc_derivatives:
             return intensity, ret_set
