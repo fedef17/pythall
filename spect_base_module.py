@@ -2995,6 +2995,20 @@ class AtmProfile(object):
         except:
             point = np.array([point])
 
+        if extend_lat and 'lat' in self.grid.names():
+            num = self.grid.names().index('lat')
+            min_lat, max_lat = self.grid.range()['lat']
+            if point[num] < min_lat:
+                point[num] = min_lat
+            if point[num] > max_lat:
+                point[num] = max_lat
+        if uniform_max_sza and 'sza' in self.grid.names():
+            num = self.grid.names().index('sza')
+            max_sza = self.grid.range()['sza'][1]
+            if point[num] > max_sza:
+                if uniform_max_sza:
+                    point[num] = max_sza
+
         if len(self.names) == 1 and profname is None:
             profname = self.names[0]
 
