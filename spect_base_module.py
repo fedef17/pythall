@@ -192,7 +192,7 @@ class LineOfSight(object):
         #t1 = 0.
         if uniform_max_sza and 'sza' in atmosphere.grid.names():
             max_sza = atmosphere.grid.range()['sza'][1]
-        if extend_lat:
+        if extend_lat and 'lat' in atmosphere.grid.names():
             min_lat, max_lat = atmosphere.grid.range()['lat']
         #t2 = 0.
         for point, nn in zip(points, range(len(points))):
