@@ -20,6 +20,8 @@ import spect_classes as spcl
 import operator
 import psutil
 import curgods
+from matplotlib.colors import LogNorm
+import matplotlib.ticker as ticker
 
 import Tkinter
 import tkMessageBox
@@ -168,7 +170,7 @@ class LineOfSight(object):
 
         return
 
-    def calc_along_LOS(self, atmosphere, planet = None, profname = None, curgod = False, set_attr = False, set_attr_name = None, uniform_max_sza = True):
+    def calc_along_LOS(self, atmosphere, planet = None, profname = None, curgod = False, set_attr = False, set_attr_name = None, uniform_max_sza = True, extend_lat = True):
         """
         Returns a vector with prof values on the LOS.
         planet is needed if intersections have to be calculated.
@@ -190,6 +192,8 @@ class LineOfSight(object):
         #t1 = 0.
         if uniform_max_sza and 'sza' in atmosphere.grid.names():
             max_sza = atmosphere.grid.range()['sza'][1]
+        if extend_lat:
+            min_lat, max_lat = atmosphere.grid.range()['lat']
         #t2 = 0.
         for point, nn in zip(points, range(len(points))):
             #time0 = time.time()
@@ -198,7 +202,13 @@ class LineOfSight(object):
                 if nam == 'alt':
                     atmpoint.append(point.Spherical()[2])
                 elif nam == 'lat':
-                    atmpoint.append(point.Spherical()[0])
+                    val = point.Spherical()[0]
+                    if extend_lat:
+                        if val < min_lat:
+                            val = min_lat
+                        if val > max_lat:
+                            val = max_lat
+                    atmpoint.append(val)
                 elif nam == 'lon':
                     atmpoint.append(point.Spherical()[1])
                 elif nam == 'sza':
@@ -587,6 +597,21 @@ class LineOfSight(object):
 
         return
 
+    def sum_column(self, gas):
+        """
+        Returns a vector with the effective gas column till step i in radtran_steps.
+        """
+        incol = [np.sum(np.array(self.radtran_steps['step'][:i+1])*np.array(self.radtran_steps['ndens'][gas][:i+1])) for i in range(len(self.radtran_steps['step']))]
+
+        return np.array(incol)
+
+    def sum_length(self):
+        """
+        Returns a vector with the length in km till step i in radtran_steps.
+        """
+        incol = [np.sum(1.e-5*self.radtran_steps['step'][:i+1]) for i in range(len(self.radtran_steps['step']))]
+
+        return np.array(incol)
 
     def calc_abundance(self, planet, gas, set_attr = False):
         """
@@ -2593,7 +2618,7 @@ class AtmProfile(object):
                 profiles[nam] = getattr(self, nam)
             return profiles
 
-    def plot(self, profname = None, fix_lat = None, fix_sza = None, fix_alt = None, logplot = False, label = None):
+    def plot(self, profname = None, fix_lat = None, fix_sza = None, fix_alt = None, logplot = False, label = None, diffsza = False):
         dim = len(self.grid.coords)
         if profname is None:
             profname = self.names[0]
@@ -2629,7 +2654,7 @@ class AtmProfile(object):
                 pl.plot(prf, self.grid.coords['alt'], label = label)
             #pl.legend()
         elif dim == 3:
-            print('scrivimi')
+            #print('scrivimi')
             coords = self.grid.names()
             indalt = coords.index('alt')
             indlat = coords.index('lat')
@@ -2645,15 +2670,26 @@ class AtmProfile(object):
                     pl.plot(prf,self.grid.coords['sza'], label = label)
                 pl.ylabel('sza')
                 pl.xlabel(profname)
-            elif fix_lat is not None:
+            elif fix_lat is not None and fix_sza is None:
                 i = list(self.grid.coords['lat']).index(fix_lat)
                 prof = self.profile().take(i, axis = indlat)
                 if indalt > indlat: indalt -= 1
                 if indsza > indlat: indsza -= 1
-                for i,sza in zip(range(len(self.grid.coords['sza'])), self.grid.coords['sza']):
+
+                colorz = cm.jet_r(np.linspace(0, 1, len(self.grid.coords['sza'])))
+                sca = cm.ScalarMappable(cmap=cm.jet_r, norm=pl.Normalize(vmin=min(self.grid.coords['sza']), vmax=max(self.grid.coords['sza'])))
+                sca.set_array(colorz)
+
+                for i,sza,col in zip(range(len(self.grid.coords['sza'])), self.grid.coords['sza'], colorz):
                     prf = prof.take(i, axis = indsza)
                     label = 'sza {}'.format(sza)
-                    pl.plot(prf,self.grid.coords['alt'], label = label)
+                    if not diffsza:
+                        pl.plot(prf,self.grid.coords['alt'], color = col, label = label)
+                    else:
+                        prf0 = prof.take(0, axis = indsza)
+                        pl.plot(prf-prf0,self.grid.coords['alt'], color = col, label = label)
+                cb = pl.colorbar(sca)
+                cb.set_label('SZA')
                 pl.ylabel('alt (km)')
                 pl.xlabel(profname)
             elif fix_sza is not None:
@@ -2662,8 +2698,15 @@ class AtmProfile(object):
                 if indlat > indsza: indlat -= 1
                 if indalt > indsza: indalt -= 1
                 for i,lat in zip(range(len(self.grid.coords['lat'])),self.grid.coords['lat']):
-                    prf = prof.take(i, axis = indlat)
-                    label = 'lat {}'.format(i)
+                    if fix_lat is None:
+                        prf = prof.take(i, axis = indlat)
+                        label = 'lat {}'.format(i)
+                    else:
+                        if lat == fix_lat:
+                            prf = prof.take(i, axis = indlat)
+                        else:
+                            continue
+                    #print(i,lat,prf[:])
                     pl.plot(prf,self.grid.coords['alt'], label = label)
                 pl.ylabel('alt (km)')
                 pl.xlabel(profname)
@@ -2911,7 +2954,7 @@ class AtmProfile(object):
         return profnew
 
 
-    def calc(self, point, profname = None, sza = None, uniform_max_sza = True):
+    def calc(self, point, profname = None, sza = None, uniform_max_sza = True, extend_lat = True):
         """
         Interpolates the profile at the given point.
         :param point: np.array point to be considered. len(point) = self.ndim
@@ -2925,7 +2968,14 @@ class AtmProfile(object):
                 if nam == 'alt':
                     atmpoint.append(point.Spherical()[2])
                 elif nam == 'lat':
-                    atmpoint.append(point.Spherical()[0])
+                    val = point.Spherical()[0]
+                    if extend_lat:
+                        min_lat, max_lat = self.grid.range()['lat']
+                        if val < min_lat:
+                            val = min_lat
+                        if val > max_lat:
+                            val = max_lat
+                    atmpoint.append(val)
                 elif nam == 'lon':
                     atmpoint.append(point.Spherical()[1])
                 elif nam == 'sza':
@@ -3443,7 +3493,7 @@ def cbar_things(levels):
     return expo, lab
 
 
-def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, cbarform = '%.1f', live = False, cmap = None, extend_lat = False, sci_notation = True):
+def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, cbarform = '%.1f', live = False, cmap = None, extend_lat = False, sci_notation = True, lognorm = False):
     """
     Makes lat/alt, lat/time or whichever type of 2D contour maps.
     :param x: X coordinate (n x m matrix)
@@ -3464,6 +3514,9 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
         conan = np.isnan(quant)
         quant = np.ma.MaskedArray(quant, conan)
 
+    if lognorm:
+        quantlog = np.log(quant)
+
     if live:
         pl.ion()
 
@@ -3482,6 +3535,9 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
 
     if levels is None:
         levels = np.linspace(np.percentile(quant.compressed(),5),np.percentile(quant.compressed(),95),ncont)
+        if lognorm:
+            levels = np.linspace(np.percentile(quantlog.compressed(),5),np.percentile(quantlog.compressed(),95),ncont)
+            levels = np.exp(levels)
 
     if continuum:
         clevels = np.linspace(levels[0],levels[-1],100)
@@ -3491,15 +3547,20 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
             clevels = np.append(pre[:-1], clevels)
         if not isclose(np.max(quant.compressed()), levels[-1]):
             clevels = np.append(clevels, post[1:])
+        if lognorm:
+            clevels = np.linspace(np.min(quantlog.compressed()), np.max(quantlog.compressed()),100)
+            clevels = np.exp(clevels)
     else:
         clevels = levels
 
-    print('levels: ',levels)
-    print('clevels: ',clevels)
+    print('levels: ', levels)
+    print('clevels: ', clevels)
     # fig2 = pl.figure(figsize=(8, 6), dpi=150)
     # pl.plot(np.arange(len(clevels)),clevels)
     # pl.scatter(np.arange(len(clevels)),clevels)
     # pl.show()
+
+    if lognorm: sci_notation = False
 
     if sci_notation:
         expo, clab = cbar_things(levels)
@@ -3508,13 +3569,28 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
         clevels = clevels/10**expo
     print(levels)
 
-    def fmt(x):
-        return '{:.1f}'.format(x)
+    if not lognorm:
+        def fmt(x):
+            return '{:.1f}'.format(x)
+    else:
+        def fmt(x):
+            logo = np.floor((mt.log10(x)))
+            if logo == 0:
+                return '{:.1f}'.format(x)
+            else:
+                xii = x/10**logo
+                return r'${{{:.1f}}} \times 10^{{{:2d}}}$'.format(xii,logo)
 
-    zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both', cmap = cmap)
-    if lines:
-        zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
-        pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+    if not lognorm:
+        zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both', cmap = cmap)
+        if lines:
+            zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
+            pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+    else:
+        zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., cmap = cmap, norm = LogNorm(min(clevels), max(clevels)))
+        if lines:
+            zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2., norm = LogNorm(min(levels), max(levels)))
+            pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
 
     # This is the fix for the white lines between contour levels
     for coz in zuf.collections:
@@ -3530,9 +3606,148 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     form = nomefile[lol+1:]
     fig.savefig(nomefile, format=form, dpi=150)
 
-    pl.close(fig)
+    if not live:
+        pl.close(fig)
 
     return
+
+
+def map_contour_2(nomefile, x, y, quant, quant_err = None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, live = False, cmap = 'jet', extend_lat = False, lognorm = False):
+    """
+    Makes lat/alt, lat/time or whichever type of 2D contour maps.
+    :param x: X coordinate (n x m matrix)
+    :param y: Y coordinate (n x m matrix)
+    :param quant: Quantity to be plotted (n x m matrix), MaskedArray
+    :param contype: If 'continuum_with_levels', color contourf with almost continous shading, with contour lines at the levels. If 'continuum', no contour lines are plotted. If 'discrete' or 'discrete_with_levels' the contourf is done on the ncont levels.
+    :param levels: If set levels are fixed by user input.
+    :param ncont: Number of levels. If levels is set, ncont is ignored.
+    :param cbarlabel: Label for the colorbar. Should contain a {} for exponential in the units, if needed.
+    """
+
+    if extend_lat:
+        x = [-90.]+list(x)+[90.]
+        x = np.array(x)
+        quant = np.c_[quant[:,0],quant,quant[:,-1]]
+        if quant_err is not None:
+            quant_err = np.c_[quant_err[:,0],quant_err,quant_err[:,-1]]
+
+    if type(quant) is not np.ma.core.MaskedArray:
+        conan = np.isnan(quant)
+        quant = np.ma.MaskedArray(quant, conan)
+        if quant_err is not None:
+            conan = np.isnan(quant_err)
+            quant_err = np.ma.MaskedArray(quant_err, conan)
+
+    if lognorm:
+        quantlog = np.log(quant)
+
+    if live:
+        pl.ion()
+
+    fig = pl.figure(figsize=(8, 6), dpi=150)
+    print(title)
+    if title is not None:
+        pl.title(title)
+
+    pl.xlabel(xlabel)
+    pl.ylabel(ylabel)
+    if ylim is not None:
+        pl.ylim(ylim[0],ylim[1])
+    if xlim is not None:
+        pl.xlim(xlim[0],xlim[1])
+
+    levels = np.linspace(np.percentile(quant.compressed(),5),np.percentile(quant.compressed(),95),ncont)
+    if lognorm:
+        levels = np.linspace(np.percentile(quantlog.compressed(),5),np.percentile(quantlog.compressed(),95),ncont)
+        levels = np.exp(levels)
+
+    clevels = np.linspace(np.nanmin(quant),np.nanmax(quant),100)
+    if lognorm:
+        clevels = np.linspace(np.min(quantlog.compressed()), np.max(quantlog.compressed()),100)
+        clevels = np.exp(clevels)
+
+    print('levels: ', levels)
+    print('clevels: ', clevels)
+
+    def fmt(x):
+        logo = int(np.floor((mt.log10(x))))
+        if logo == 0:
+            return '{:.1f}'.format(x)
+        else:
+            xii = x/10**logo
+            return r'${{{:.1f}}} \times 10^{{{:2d}}}$'.format(xii,logo)
+
+    def fmt_log_tick(x, pos):
+        logo = int(np.floor((np.log10(x))))
+        if logo == 0:
+            return '{:.1f}'.format(x)
+        else:
+            xii = x/10**logo
+            return r'${{{:.1f}}} \times 10^{{{:2d}}}$'.format(xii,logo)
+
+    if not lognorm:
+        zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both', cmap = cmap)
+        zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2.)
+        pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+    else:
+        zuf = pl.contourf(x,y,quant,corner_mask = True,levels = clevels, linewidths = 0., cmap = cmap, norm = LogNorm(min(clevels), max(clevels)))
+        zol = pl.contour(x,y,quant,levels = levels, colors = 'grey', linewidths = 2., norm = LogNorm(min(levels), max(levels)))
+        pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+
+    # This is the fix for the white lines between contour levels
+    for coz in zuf.collections:
+        coz.set_edgecolor("face")
+    #cb = pl.colorbar(mappable = zuf, pad = 0.1)
+    cb = pl.colorbar(zuf, format = ticker.FuncFormatter(fmt_log_tick))
+    if lognorm:
+        ctik1 = np.floor(np.min(np.log10(quant.compressed())))
+        ctik2 = np.ceil(np.max(np.log10(quant.compressed())))
+        ctiks = np.logspace(ctik1,ctik2,3*int(ctik2-ctik1))
+    else:
+        ctiks = np.linspace(min(clevels),max(clevels),10)
+    cb.set_ticks(ctiks)
+    #cb.set_ticklabels([fmt(cti) for cti in ctiks])
+    cb.set_label(cbarlabel)
+
+    lol = nomefile.find('.')
+    form = nomefile[lol+1:]
+    fig.savefig(nomefile, format=form, dpi=150)
+
+    if not live:
+        pl.close(fig)
+
+    if quant_err is not None:
+        fig2 = pl.figure(figsize=(8,6), dpi = 150)
+        pl.xlabel(xlabel)
+        pl.ylabel(ylabel)
+        if ylim is not None:
+            pl.ylim(ylim[0],ylim[1])
+        if xlim is not None:
+            pl.xlim(xlim[0],xlim[1])
+        if not lognorm:
+            zuf = pl.contourf(x,y,quant_err,corner_mask = True,levels = clevels, linewidths = 0., extend = 'both', cmap = cmap)
+            zol = pl.contour(x,y,quant_err,levels = levels, colors = 'grey', linewidths = 2.)
+            pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+        else:
+            zuf = pl.contourf(x,y,quant_err,corner_mask = True,levels = clevels, linewidths = 0., cmap = cmap, norm = LogNorm(min(clevels), max(clevels)))
+            zol = pl.contour(x,y,quant_err,levels = levels, colors = 'grey', linewidths = 2., norm = LogNorm(min(levels), max(levels)))
+            pl.clabel(zol, zol.levels[::2], inline = True, fmt = fmt)
+
+        # This is the fix for the white lines between contour levels
+        for coz in zuf.collections:
+            coz.set_edgecolor("face")
+        #cb = pl.colorbar(mappable = zuf, pad = 0.1)
+        cb = pl.colorbar(zuf, format = ticker.FuncFormatter(fmt_log_tick))
+        cb.set_ticks(ctiks)
+        #cb.set_ticklabels([fmt(cti) for cti in ctiks])
+        cb.set_label(cbarlabel)
+
+        lol = nomefile.find('.')
+        form = nomefile[lol+1:]
+        fig2.savefig(nomefile[:lol]+'_error.'+form, format=form, dpi=150)
+
+    return
+
 
 
 def interpNd(arr,grid,point):
@@ -4261,11 +4476,12 @@ def latform_manuel(lat, formato = ''):
                 break
         return 'lat{:1d}'.format(okk)
 
-def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None, formato = '', correct_levstring = False):
+def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, linee = None, add_fundamental = True, extend_to_alt = None, formato = '', correct_levstring = False, lat_interp = 'lin'):
     """
     Returns a set of molecs with the correct levels and tvibs.
     @@@ Note
     works with lat sza alt T_vibs
+    lat_interp can have two values: 'box' and 'lin'
     """
 
     sets = os.listdir(cart_tvibs)
@@ -4324,8 +4540,6 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
         t_vib_levels[(mol, iso, lev)] = copy.deepcopy(t_vib_0)
         print((mol,iso,lev))
 
-    lsa_grid = AtmGrid(['lat', 'sza', 'alt'], [lats, szas, alts])
-
     T_kin_2D = planet.atmosphere.temp
 
     for nsz in range(len(szas)):
@@ -4334,7 +4548,12 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
         except:
             t_vib[:,nsz,:] = T_kin_2D.T
 
-    T_kin_zero = AtmProfile(lsa_grid, t_vib, 'vibtemp', ['box','1cos','lin'])
+    if lat_interp == 'box':
+        lsa_grid = AtmGrid(['lat', 'sza', 'alt'], [lats, szas, alts])
+        T_kin_zero = AtmProfile(lsa_grid, t_vib, 'vibtemp', ['box','lin','lin'])
+    elif lat_interp == 'lin':
+        lsa_grid = AtmGrid(['lat', 'sza', 'alt'], [lat_c, szas, alts])
+        T_kin_zero = AtmProfile(lsa_grid, t_vib, 'vibtemp', ['lin','lin','lin'])
 
     molecs = dict()
     print(lats, szas)
@@ -4408,7 +4627,10 @@ def add_nLTE_molecs_from_tvibmanuel_3D(planet, cart_tvibs, n_alt_max = None, lin
                 if levvo.vibtemp is None:
                     for [mm, ii, leo] in t_vib_levels.keys():
                         if levvo.mol == mm and levvo.iso == ii and levvo.equiv(leo):
-                            vt = AtmProfile(lsa_grid, t_vib_levels[(mm, ii, leo)], 'vibtemp', ['box','1cos','lin'])
+                            if lat_interp == 'box':
+                                vt = AtmProfile(lsa_grid, t_vib_levels[(mm, ii, leo)], 'vibtemp', ['box','1cos','lin'])
+                            elif lat_interp == 'lin':
+                                vt = AtmProfile(lsa_grid, t_vib_levels[(mm, ii, leo)], 'vibtemp', ['lin','lin','lin'])
                             levvo.add_vibtemp(vt)
 
     if linee is not None:
