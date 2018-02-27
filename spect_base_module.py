@@ -1421,10 +1421,58 @@ def num_density(P, T, vmr = 1.0):
     """
     Calculates num density. P in hPa, T in K, vmr in absolute fraction (not ppm!!)
     """
-    n = vmr*P/(kb*T) # num. density in cm-3
+    n = P*vmr/(T*kb) # num. density in cm-3
 
     return n
 
+
+# def nd_to_VMR_profile(atmosphere, nd):
+#     """
+#     Works with AtmProfile objects. Convert number density to VMR profile.
+#     """
+#
+#     Temp = atmosphere.get('temp')
+#     Pres = atmosphere.get('pres')
+#     nd_tot = num_density(Pres, Temp)
+#
+#     vmr = nd/nd_tot
+#
+#     return vmr
+#
+# def VMR_to_nd_profile(atmosphere, VMR):
+#     """
+#     Works with AtmProfile objects. Convert VMR to number density profile.
+#     """
+#
+#     Temp = atmosphere.get('temp')
+#     Pres = atmosphere.get('pres')
+#     nd_tot = num_density(Pres, Temp)
+#
+#     nd = nd_tot*VMR
+#
+#     return nd
+
+def nd_to_VMR_profile(Pres, Temp, nd):
+    """
+    Convert number density to VMR profile.
+    """
+
+    nd_tot = num_density(Pres, Temp)
+
+    vmr = nd/nd_tot
+
+    return vmr
+
+def VMR_to_nd_profile(Pres, Temp, VMR):
+    """
+    Works with AtmProfile objects. Convert VMR to number density profile.
+    """
+
+    nd_tot = num_density(Pres, Temp)
+
+    nd = nd_tot*VMR
+
+    return nd
 
 def CurGod_ROZZO(ndens, quant, interp = 'lin', extension_factor = 10):
     """

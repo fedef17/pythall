@@ -762,7 +762,7 @@ def stereopos(lon,lat,nomefi,color='black',marker='.',polo='N',title='',show=Fal
     return
 
 
-def findspi(wls,spe,thres=1.5,min=-2e-4):
+def findspi(wls,spe,thres=1.5,min_sp=-2e-4):
     """
     Sets the mask at 0 if the point is a suspected spike. Checks line intensities on the H3+ line and each other point with more than thres the max of these lines is masked.
     :return: mask
@@ -774,7 +774,7 @@ def findspi(wls,spe,thres=1.5,min=-2e-4):
         cond1 = (abs(wls-line) < 1.0)
         vals[i] = spe[cond1]
 
-    cond = ((wls > 3200.) & (wls < 3800.)) & ((spe > thres*np.max(vals)) | (spe < min))
+    cond = ((wls > 3200.) & (wls < 3800.)) & ((spe > thres*np.max(vals)) | (spe < min_sp))
     mask = np.ones(len(spe), dtype = 'i4')
     mask[cond] = 0
 
