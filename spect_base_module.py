@@ -34,6 +34,7 @@ kb = 1.38065e-19 # boltzmann constant to use with P in hPa, n in cm-3, T in K (1
 c_R = 8.31446 # J K-1 mol-1
 c_G = 6.67408e-11 # m3 kg-1 s-2
 kbc = const.k/(const.h*100*const.c) # 0.69503
+Navo = 6.02214076e23
 
 def check_free_space(cart, threshold = 0.05, verbose = False):
     fract = (1.0*os.statvfs(cart).f_bfree)/os.statvfs(cart).f_blocks
@@ -1426,6 +1427,15 @@ def num_density(P, T, vmr = 1.0):
     return n
 
 
+def air_density(P, T, MM = 29):
+    """
+    Calculates density in g/cm-3. P in hPa, T in K, vmr in absolute fraction (not ppm!!)
+    """
+    n = P/(T*kb) # num. density in cm-3
+    d = n*MM/Navo
+
+    return d
+
 # def nd_to_VMR_profile(atmosphere, nd):
 #     """
 #     Works with AtmProfile objects. Convert number density to VMR profile.
@@ -2088,7 +2098,7 @@ def add_molec_HITRAN(mol, add_all_iso = True, n_max = None, lines = None, add_le
     return moleca
 
 
-def find_all_iso_HITRAN(mol, metadatafile = './molparam.txt'):
+def find_all_iso_HITRAN(mol, metadatafile = '/home/fedefab/Scrivania/Research/Dotto/Git/pythall/molparam.txt'):
     """
     Finds all isotopologues of molecule in the HITRAN list.
     """
@@ -2097,7 +2107,7 @@ def find_all_iso_HITRAN(mol, metadatafile = './molparam.txt'):
     iso_ratios = []
     for num in range(1,12):
         try:
-            resu = find_molec_metadata(mol, num)
+            resu = find_molec_metadata(mol, num, filename = metadatafile)
             print(resu)
             iso_names.append(resu['iso_name'])
             iso_MM.append(resu['iso_MM'])
@@ -2173,7 +2183,7 @@ def find_levels_isomol_HITRAN(lines, mol, iso):
     return lev_strings, energies, simmetries
 
 
-def find_molec_metadata(mol, iso, filename = './molparam.txt'):
+def find_molec_metadata(mol, iso, filename = '/home/fedefab/Scrivania/Research/Dotto/Git/pythall/molparam.txt'):
     """
     Loads molecular metadata from the molparam.txt HITRAN file. Returns a dict with: mol. name, iso. name, iso. ratio, iso. MM
     """
@@ -3674,7 +3684,7 @@ def map_contour(nomefile, x, y, quant, continuum = True, lines = True, levels=No
     return
 
 
-def map_contour_2(nomefile, x, y, quant, quant_err = None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, live = False, cmap = 'jet', extend_lat = False, lognorm = False):
+def map_contour_2(nomefile, x, y, quant, quant_err = None, ncont=12, cbarlabel='quant', xlabel='x', ylabel='y', title = None, ylim=None, xlim=None, live = False, cmap = 'jet', extend_lat = False, extend_to_max_lat = None, lognorm = False):
     """
     Makes lat/alt, lat/time or whichever type of 2D contour maps.
     :param x: X coordinate (n x m matrix)
@@ -3687,11 +3697,19 @@ def map_contour_2(nomefile, x, y, quant, quant_err = None, ncont=12, cbarlabel='
     """
 
     if extend_lat:
-        x = [-90.]+list(x)+[90.]
-        x = np.array(x)
-        quant = np.c_[quant[:,0],quant,quant[:,-1]]
-        if quant_err is not None:
-            quant_err = np.c_[quant_err[:,0],quant_err,quant_err[:,-1]]
+        if extend_to_max_lat is None:
+            x = [-90.]+list(x)+[90.]
+            x = np.array(x)
+            quant = np.c_[quant[:,0],quant,quant[:,-1]]
+            if quant_err is not None:
+                quant_err = np.c_[quant_err[:,0],quant_err,quant_err[:,-1]]
+        else:
+            x = [-90.]+[-1.*extend_to_max_lat]+list(x)+[extend_to_max_lat]+[90.]
+            x = np.array(x)
+            nanni = np.nan*quant[:,0]
+            quant = np.c_[nanni,quant[:,0],quant,quant[:,-1],nanni]
+            if quant_err is not None:
+                quant_err = np.c_[nanni,quant_err[:,0],quant_err,quant_err[:,-1],nanni]
 
     if type(quant) is not np.ma.core.MaskedArray:
         conan = np.isnan(quant)
@@ -4478,6 +4496,122 @@ def read_input_atm_man(filename):
     temp = np.array(prof)
 
     return alts, temp, pres
+
+
+def read_input_vmr_man(filename, version = 1):
+    """
+    Reads input atmosphere in manuel standard.
+    :param filename:
+    :return:
+    """
+    infile = open(filename,'r')
+    trova_spip(infile,hasha='$')
+    n_alt = int(infile.readline())
+    trova_spip(infile,hasha='$')
+    prof = []
+    while len(prof) < n_alt:
+        line = infile.readline()
+        prof += list(map(float, line.split()))
+    alts = np.array(prof)
+
+    trova_spip(infile,hasha='$')
+    n_mols = int(infile.readline().strip())
+    mol_vmrs = dict()
+
+    mol_list = []
+    mol_nums = []
+    for i in range(n_mols):
+        if version == 1:
+            molnam = trova_spip(infile, hasha='$', read_past = True).strip()
+        elif version == 2:
+            trova_spip(infile, hasha='$')
+            ii, molnam = [cos.strip() for cos in infile.readline().split()]
+        print(molnam)
+        prof = []
+        while len(prof) < n_alt:
+            line = infile.readline()
+            prof += list(map(float, line.split()))
+        mol_vmrs[molnam] = np.array(prof)
+        mol_list.append(molnam)
+        mol_nums.append(int(ii))
+
+    return alts, mol_vmrs, mol_list, mol_nums
+
+
+def write_input_vmr_man(filename, alts, mol_vmrs, hit_gas_list = None, hit_gas_num = None, version = 2):
+    """
+    Writes input atmosphere in manuel standard.
+    :param filename:
+    :return:
+    """
+
+    if hit_gas_list is None:
+        hit_gas_list = 'H2O CO2 O3 N2O CO CH4 O2 NO NO2 HNO3 OH CLO N2 HCN HO2 OH2O CO2 O3 N2O CO CH4 O2 NO NO2 HNO3 OH CLO N2 HCN HO2 O'.split()
+    if hit_gas_num is None:
+        hit_gas_num = np.arange(len(hit_gas_list))+1
+
+    fi = open(filename,'w')
+    fi.write('Number of levels\n')
+    fi.write('{:1s}\n'.format('$'))
+    fi.write('{:5d}\n'.format(len(alts)))
+
+    fi.write('\n')
+    fi.write('altitude (km)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,alts,5,'{:11.1f}')
+
+    n_prof = len([mol for mol in hit_gas_list if mol in mol_vmrs.keys()])
+    fi.write('\n')
+    fi.write('number of gas profiles\n')
+    fi.write('{:1s}\n'.format('$'))
+    fi.write('{:5d}\n'.format(n_prof))
+
+    fi.write('\n')
+    fi.write('profiles [ppmv]\n')
+
+    for i, gas in zip(hit_gas_num, hit_gas_list):
+        if not gas in mol_vmrs.keys():
+            print('skippo ', gas)
+            continue
+        if version == 1:
+            fi.write('{:1s} {:>4s}\n'.format('$', gas))
+        elif version == 2:
+            fi.write('{:1s}\n'.format('$'))
+            fi.write('{:3d}{:>4s}\n'.format(i, gas))
+        writevec(fi, mol_vmrs[gas], 8, '{:11.3e}')
+        #fi.write('\n')
+
+    fi.close()
+
+    return
+
+def scriviinputmanuel(alts,temp,pres,filename):
+    """
+    Writes input PT for fomichev in Manuel's format.
+    :return:
+    """
+    fi = open(filename,'w')
+    fi.write('Number of levels\n')
+    fi.write('{:1s}\n'.format('$'))
+    fi.write('{:5d}\n'.format(len(alts)))
+
+    fi.write('\n')
+    fi.write('altitude (km)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,alts,5,'{:11.1f}')
+
+    fi.write('\n')
+    fi.write('pressure (hPa)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,pres,8,'{:11.3e}')
+
+    fi.write('\n')
+    fi.write('temperature (K)\n')
+    fi.write('{:1s}\n'.format('$'))
+    writevec(fi,temp,8,'{:11.3e}')
+
+    fi.close()
+    return
 
 def latstr_manuel_c_to_ex(lat_str, formato = ''):
     if formato == 'Maya':
