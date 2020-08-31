@@ -15,11 +15,16 @@ import copy
 #import pickle
 import cPickle as pickle
 import time
+
+sys.path.insert(0, '/home/fabiano/Research/git/SpectRobot/')
+print('NO MODULE NAMED CURGODS! Import the fortran library')
+#import curgods
+
 import spect_main_module as smm
 import spect_classes as spcl
 import operator
 import psutil
-import curgods
+
 from matplotlib.colors import LogNorm
 import matplotlib.ticker as ticker
 
@@ -4523,6 +4528,7 @@ def read_input_vmr_man(filename, version = 1):
     for i in range(n_mols):
         if version == 1:
             molnam = trova_spip(infile, hasha='$', read_past = True).strip()
+            ii = int(infile.readline().strip())
         elif version == 2:
             trova_spip(infile, hasha='$')
             ii, molnam = [cos.strip() for cos in infile.readline().split()]
